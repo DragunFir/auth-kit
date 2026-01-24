@@ -77,11 +77,11 @@ AUTH_OWNER_EMAIL=admin@example.com
 ```
 | Methode | Pfad                  | Beschreibung        |
 | ------- | --------------------- | ------------------- |
-| POST    | `/auth/login`         | Lokaler Login       |
-| POST    | `/auth/logout`        | Session beenden     |
-| GET     | `/auth/me`            | Aktueller Benutzer  |
-| GET     | `/auth/oidc/login`    | OIDC Login Redirect |
-| GET     | `/auth/oidc/callback` | OIDC Callback       |
+| POST    | /auth/login           | Lokaler Login       |
+| POST    | /auth/logout          | Session beenden     |
+| GET     | /auth/me              | Aktueller Benutzer  |
+| GET     | /auth/oidc/login      | OIDC Login Redirect |
+| GET     | /auth/oidc/callback   | OIDC Callback       |
 ```
 
 ## Sicherheitshinweise
