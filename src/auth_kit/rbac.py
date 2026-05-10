@@ -1,11 +1,13 @@
 from __future__ import annotations
 
-from .models import User
+from collections.abc import Iterable
 
 
-def has_role(user: User, *roles: str) -> bool:
-    user_roles = set(r.lower() for r in user.roles)
-    for r in roles:
-        if r.lower() in user_roles:
-            return True
-    return False
+def has_role(subject: object, *roles: str) -> bool:
+    raw_roles: Iterable[str]
+    if hasattr(subject, "roles"):
+        raw_roles = getattr(subject, "roles")
+    else:
+        raw_roles = subject  # type: ignore[assignment]
+    subject_roles = {str(role).lower() for role in raw_roles}
+    return any(role.lower() in subject_roles for role in roles)

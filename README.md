@@ -1,90 +1,165 @@
-# auth-kit
+# auth-kit v2
 
-auth-kit ist ein **modulares Authentifizierungs-Kit für Python/FastAPI** mit dem Fokus auf
-**Standalone-First**, **Selfhosting** und **optionaler SSO-Integration**.
+auth-kit v2 ist ein eigenständiges Identity-, Profil-, Rollen- und Session-System mit FastAPI-Backend und eigener React-Weboberfläche.
 
-Jede Anwendung kann vollständig eigenständig laufen (eigene User, eigene Datenbank),
-kann aber optional über OAuth2 / OpenID Connect an einen zentralen Identity Provider
-angebunden werden.
+Es verwaltet:
 
----
+- Login und Registrierung
+- Benutzeridentität und Profile
+- Adressen, Kontakt- und Webdaten
+- Preferences und Security-Status
+- Sessions/Geräte
+- Admin-Userverwaltung und Rollen
 
-## Zielsetzung
+Andere Apps können auth-kit später optional nutzen, aber auth-kit bringt keine Fachlogik fremder Anwendungen mit.
 
-- Wiederverwendbare Authentifizierungsbasis für mehrere Projekte
-- Keine Abhängigkeit von einem zentralen Auth-Server
-- Optionale Integration in bestehende SSO-Infrastrukturen
-- Klare Trennung von Authentifizierung und Anwendungslogik
+## Setup
 
----
+1. Python-Venv anlegen:
 
-## Funktionsumfang
-
-### Lokale Authentifizierung (Standard)
-- Login per E-Mail + Passwort
-- Passwort-Hashing (bcrypt)
-- Cookie-basierte Sessions (HttpOnly)
-- Session-Persistenz in PostgreSQL
-
-### Rollen & Zugriff
-- Rollenbasiertes Modell (`user`, `admin`, `owner`)
-- Erweiterbar für eigene Permission-Logik
-- Bootstrap-Owner per ENV möglich
-
-### OAuth2 / OpenID Connect (optional)
-- Unterstützung gängiger IdPs (z. B. Keycloak, Authentik, Authelia)
-- Login via Authorization Code Flow
-- Claim-Mapping auf lokale User & Rollen
-- Aktivierung ausschließlich per Environment-Variablen
-
----
-
-## env
-### Pflicht 
-AUTH_DATABASE_URL=postgresql+psycopg://user:password@localhost:5432/app_db
-
-### Session & Cookies  
-AUTH_SESSION_COOKIE_NAME=auth_sid
-AUTH_SESSION_TTL_DAYS=30
-AUTH_COOKIE_SECURE=false
-AUTH_COOKIE_SAMESITE=lax
-AUTH_COOKIE_DOMAIN=
-
-- In produktiven HTTPS-Umgebungen sollte AUTH_COOKIE_SECURE=true gesetzt werden.  
-
-### Lokale Authentifizierung  
-AUTH_ALLOW_LOCAL_LOGIN=true
-
-### OAuth2 / OpenID Connect (optional)
-AUTH_OIDC_ENABLED=true
-AUTH_OIDC_ISSUER=https://idp.example.com/realms/example
-AUTH_OIDC_CLIENT_ID=example-app
-AUTH_OIDC_CLIENT_SECRET=secret
-AUTH_OIDC_REDIRECT_URL=https://app.example.com/api/auth/oidc/callback
-
-AUTH_OIDC_SCOPES=openid profile email
-AUTH_OIDC_CLAIM_EMAIL=email
-AUTH_OIDC_CLAIM_NAME=name
-AUTH_OIDC_CLAIM_GROUPS=groups
-
-### Rollen & Bootstrap
-AUTH_DEFAULT_ROLES=user
-AUTH_OWNER_EMAIL=admin@example.com
-
-- Meldet sich diese E-Mail per OIDC an, wird automatisch die Rolle owner vergeben.
-
-## API-Endpoints
-```
-| Methode | Pfad                  | Beschreibung        |
-| ------- | --------------------- | ------------------- |
-| POST    | /auth/login           | Lokaler Login       |
-| POST    | /auth/logout          | Session beenden     |
-| GET     | /auth/me              | Aktueller Benutzer  |
-| GET     | /auth/oidc/login      | OIDC Login Redirect |
-| GET     | /auth/oidc/callback   | OIDC Callback       |
+```bash
+python3 -m venv .venv
 ```
 
-## Sicherheitshinweise
-- Cookies sollten in produktiven Umgebungen ausschließlich über HTTPS verwendet werden
-- OIDC-State und Nonce sind im MVP minimal gehalten
-- Rollen aus OIDC-Claims nur verwenden, wenn der IdP vertrauenswürdig konfiguriert ist
+2. Backend-Dependencies installieren:
+
+```bash
+.venv/bin/pip install -e '.[dev]'
+```
+
+3. Frontend-Dependencies installieren:
+
+```bash
+npm --prefix web install
+```
+
+Alternativ installiert `make setup` beide Seiten:
+
+```bash
+make setup
+```
+
+## ENV
+
+Eine lokale Basis-Konfiguration liegt in [.env.example](/srv/dev/auth-kit/.env.example).
+
+Wichtige Variablen:
+
+```env
+AUTHKIT_DATABASE_URL=postgresql+psycopg://authkit:authkit@127.0.0.1:5432/authkit
+AUTHKIT_SESSION_COOKIE_NAME=authkit_sid
+AUTHKIT_SESSION_COOKIE_SECURE=false
+AUTHKIT_SESSION_COOKIE_SAMESITE=lax
+AUTHKIT_SESSION_TTL_DAYS=30
+AUTHKIT_UPLOAD_DIR=./data/uploads
+AUTHKIT_AVATAR_MAX_MB=5
+
+AUTHKIT_BOOTSTRAP_OWNER_ENABLED=true
+AUTHKIT_BOOTSTRAP_OWNER_EMAIL=owner@example.com
+AUTHKIT_BOOTSTRAP_OWNER_USERNAME=owner
+AUTHKIT_BOOTSTRAP_OWNER_PASSWORD=PrimaryPass!123
+AUTHKIT_BOOTSTRAP_OWNER_DISPLAY_NAME="Bootstrap Owner"
+```
+
+## Datenbank starten
+
+Für die lokale Entwicklung liegt eine Postgres-Definition in [docker-compose.yml](/srv/dev/auth-kit/docker-compose.yml).
+
+Start:
+
+```bash
+make db-up
+```
+
+Stop:
+
+```bash
+make db-down
+```
+
+## Migrationen
+
+Migrationen werden mit Alembic ausgeführt:
+
+```bash
+make migrate
+```
+
+`make migrate` und `make dev-api` lesen beide dieselbe `AUTHKIT_DATABASE_URL` aus der Shell-Umgebung oder aus `.env`.
+
+## Entwicklung
+
+Backend starten:
+
+```bash
+make dev-api
+```
+
+Frontend starten:
+
+```bash
+make dev-web
+```
+
+Backend und Frontend zusammen starten:
+
+```bash
+make dev
+```
+
+Standardports:
+
+- API: `http://127.0.0.1:8000`
+- Web: `http://127.0.0.1:5173`
+
+Die Vite-Entwicklung nutzt einen Proxy auf `/api` zum FastAPI-Backend. Avatare werden über kontrollierte API-Endpunkte unter `/api/auth/...` ausgeliefert, nicht über direkt sichtbare Dateipfade.
+
+Wenn noch kein Owner existiert, zeigt die Weboberfläche automatisch einen First-Owner-Setup-Flow über `/api/setup/status` und `/api/setup/owner`.
+
+## Tests
+
+```bash
+make test
+```
+
+## Lint / Format / Typecheck
+
+```bash
+make check
+```
+
+`make check` führt aus:
+
+- `ruff check`
+- `ruff format --check`
+- `mypy src`
+- `npm run lint`
+- `npm run typecheck`
+- `npm run build`
+
+## Frontend-Struktur
+
+Die Weboberfläche liegt unter [web](/srv/dev/auth-kit/web) und enthält:
+
+- Login und Registrierung
+- `/me`- und Account-Ansicht
+- Profil-, Avatar-, Kontakt- und Preferences-Editoren
+- Adressverwaltung
+- Session-/Geräteübersicht
+- Admin-Userliste und Admin-Editor
+- Rollenverwaltung
+
+## Backend-Struktur
+
+Das Backend liegt unter [src/auth_kit](/srv/dev/auth-kit/src/auth_kit) und setzt auf:
+
+- FastAPI
+- SQLAlchemy 2.x
+- Alembic
+- Pydantic v2
+- Argon2id
+
+Architektur und Backend-Plan:
+
+- [auth-kit-v2.md](/srv/dev/auth-kit/docs/architecture/auth-kit-v2.md)
+- [auth-kit-v2-backend-plan.md](/srv/dev/auth-kit/docs/architecture/auth-kit-v2-backend-plan.md)

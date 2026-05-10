@@ -1,0 +1,20 @@
+services:
+  db:
+    image: postgres:16
+    container_name: auth-kit-db
+    environment:
+      POSTGRES_DB: authkit
+      POSTGRES_USER: authkit
+      POSTGRES_PASSWORD: authkit
+    ports:
+      - "5432:5432"
+    volumes:
+      - auth-kit-postgres:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U authkit -d authkit"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+volumes:
+  auth-kit-postgres:
