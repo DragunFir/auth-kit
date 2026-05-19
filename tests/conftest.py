@@ -31,8 +31,10 @@ def settings_factory(tmp_path) -> Callable[..., Settings]:
             "bootstrap_owner_display_name": "Bootstrap Owner",
             "upload_dir": str(tmp_path / "uploads"),
             "avatar_max_mb": 1,
-            "password_reset_delivery_mode": "log",
+            "mail_mode": "dev",
             "password_reset_url_base": "http://127.0.0.1:5173/reset-password",
+            "dev_mail_outbox_enabled": True,
+            "dev_mail_outbox_path": str(tmp_path / "data" / "dev-mail" / "outbox.jsonl"),
         }
         base_values.update(overrides)
         return Settings(**base_values)

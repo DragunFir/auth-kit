@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import logging
 import smtplib
 from datetime import timedelta
@@ -280,6 +281,26 @@ def build_password_reset_url(settings: Settings, raw_token: str) -> str:
     return urlunsplit((parts.scheme, parts.netloc, parts.path, urlencode(query_items), parts.fragment))
 
 
+def append_dev_mail_outbox(*, email: str, raw_token: str, reset_url: str, settings: Settings) -> None:
+    if not settings.dev_mail_outbox_enabled:
+        return
+
+    outbox_path = Path(settings.dev_mail_outbox_path)
+    outbox_path.parent.mkdir(parents=True, exist_ok=True)
+    payload = {
+        "kind": "password_reset",
+        "email": email,
+        "reset_url": reset_url,
+        "token": raw_token,
+        "expires_in_minutes": settings.password_reset_ttl_minutes,
+        "created_at": utcnow().isoformat(),
+        "mail_mode": settings.mail_mode,
+    }
+    with outbox_path.open("a", encoding="utf-8") as handle:
+        handle.write(json.dumps(payload, ensure_ascii=True))
+        handle.write("\n")
+
+
 def deliver_password_reset_email(*, email: str, raw_token: str, settings: Settings) -> None:
     reset_url = build_password_reset_url(settings, raw_token)
     subject = "auth-kit password reset"
@@ -290,8 +311,9 @@ def deliver_password_reset_email(*, email: str, raw_token: str, settings: Settin
         f"Token expires in {settings.password_reset_ttl_minutes} minutes.\n"
     )
 
-    if settings.password_reset_delivery_mode == "log":
-        logger.info("Password reset mail for %s\n%s", email, body)
+    if settings.mail_mode in {"dev", "log"}:
+        logger.info("[auth-kit] password reset link for %s: %s", email, reset_url)
+        append_dev_mail_outbox(email=email, raw_token=raw_token, reset_url=reset_url, settings=settings)
         return
 
     if not settings.smtp_host or not settings.smtp_from_email:

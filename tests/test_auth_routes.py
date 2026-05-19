@@ -1,7 +1,9 @@
 from __future__ import annotations
 
+import json
 import logging
 import re
+from urllib.parse import parse_qs, urlsplit
 
 import pytest
 from fastapi.testclient import TestClient
@@ -496,15 +498,26 @@ def test_forgot_password_and_reset_flow(app, client: TestClient, db_session, api
         assert forgot.status_code == 200
         assert forgot.json()["message"] == "If an account exists for that email, reset instructions will be sent."
 
-        match = re.search(r"Reset token: (\S+)", caplog.text)
+        match = re.search(r"\[auth-kit\] password reset link for reset@example\.com: (\S+)", caplog.text)
         assert match is not None
-        raw_token = match.group(1)
+        reset_url = match.group(1)
+        raw_token = parse_qs(urlsplit(reset_url).query)["token"][0]
 
         db_session.expire_all()
         reset_token = db_session.query(AuthPasswordResetToken).one()
         assert reset_token.token_hash != raw_token
         assert len(reset_token.token_hash) == 64
         assert reset_token.consumed_at is None
+
+        outbox_path = app.state.settings.dev_mail_outbox_path
+        with open(outbox_path, encoding="utf-8") as handle:
+            outbox_lines = handle.readlines()
+        assert len(outbox_lines) == 1
+        outbox_entry = json.loads(outbox_lines[0])
+        assert outbox_entry["email"] == "reset@example.com"
+        assert outbox_entry["reset_url"] == reset_url
+        assert outbox_entry["token"] == raw_token
+        assert outbox_entry["mail_mode"] == "dev"
 
         reset = api_request(
             client,

@@ -43,8 +43,10 @@ AUTHKIT_UPLOAD_DIR=./data/uploads
 AUTHKIT_AVATAR_MAX_MB=5
 
 AUTHKIT_PASSWORD_RESET_TTL_MINUTES=30
-AUTHKIT_PASSWORD_RESET_DELIVERY_MODE=log
+AUTHKIT_MAIL_MODE=dev
 AUTHKIT_PASSWORD_RESET_URL_BASE=http://127.0.0.1:5173/reset-password
+AUTHKIT_DEV_MAIL_OUTBOX_ENABLED=true
+AUTHKIT_DEV_MAIL_OUTBOX_PATH=./data/dev-mail/outbox.jsonl
 
 AUTHKIT_BOOTSTRAP_OWNER_ENABLED=true
 AUTHKIT_BOOTSTRAP_OWNER_EMAIL=owner@example.com
@@ -58,7 +60,7 @@ Produktivempfehlungen:
 - `AUTHKIT_SESSION_COOKIE_SECURE=true`
 - `AUTHKIT_CORS_ALLOW_ORIGINS` nur auf explizite Origins setzen
 - Bootstrap-Owner nur für initiales Provisioning aktivieren
-- Passwort-Reset in Produktion auf `AUTHKIT_PASSWORD_RESET_DELIVERY_MODE=smtp` umstellen
+- Passwort-Reset in Produktion auf `AUTHKIT_MAIL_MODE=smtp` umstellen
 
 Optionale SMTP-Variablen sind in `.env.example` vorbereitet.
 
@@ -113,8 +115,10 @@ Eigenschaften:
 - Reset-Tokens werden nur gehasht gespeichert
 - TTL ist per ENV konfigurierbar
 - Responses vermeiden Email-Enumeration
-- Der Entwicklungsmodus schreibt Reset-Links in den API-Log
-- SMTP-Zustellung ist vorbereitet
+- Im Dev-Modus (`AUTHKIT_MAIL_MODE=dev` oder `log`) wird keine echte Email versendet
+- Der Reset-Link erscheint im Backend-Log als `[auth-kit] password reset link for <email>: <url>`
+- Optional wird der Link zusätzlich in `data/dev-mail/outbox.jsonl` geschrieben
+- Für echte Emails müssen `AUTHKIT_MAIL_MODE=smtp` sowie die SMTP-ENV gesetzt sein
 
 Die Weboberfläche enthält einen vollständigen Forgot-/Reset-Flow.
 

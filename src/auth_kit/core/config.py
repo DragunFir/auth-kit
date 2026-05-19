@@ -4,11 +4,11 @@ from functools import lru_cache
 from importlib.metadata import PackageNotFoundError, version
 from typing import Any, Literal
 
-from pydantic import Field, field_validator
+from pydantic import AliasChoices, Field, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 SameSiteMode = Literal["lax", "strict", "none"]
-EmailDeliveryMode = Literal["log", "smtp"]
+MailMode = Literal["dev", "log", "smtp"]
 
 
 def _default_version() -> str:
@@ -48,8 +48,18 @@ class Settings(BaseSettings):
 
     password_min_length: int = 12
     password_reset_ttl_minutes: int = 30
-    password_reset_delivery_mode: EmailDeliveryMode = "log"
+    mail_mode: MailMode = Field(
+        default="dev",
+        validation_alias=AliasChoices(
+            "AUTHKIT_MAIL_MODE",
+            "AUTHKIT_PASSWORD_RESET_DELIVERY_MODE",
+            "mail_mode",
+            "password_reset_delivery_mode",
+        ),
+    )
     password_reset_url_base: str | None = None
+    dev_mail_outbox_enabled: bool = True
+    dev_mail_outbox_path: str = "./data/dev-mail/outbox.jsonl"
     smtp_host: str | None = None
     smtp_port: int = 587
     smtp_username: str | None = None
@@ -89,12 +99,12 @@ class Settings(BaseSettings):
             return [str(item).strip() for item in value if str(item).strip()]
         raise ValueError("cors_allow_origins must be a comma-separated string or list")
 
-    @field_validator("password_reset_delivery_mode")
+    @field_validator("mail_mode")
     @classmethod
-    def validate_email_delivery_mode(cls, value: str) -> EmailDeliveryMode:
+    def validate_mail_mode(cls, value: str) -> MailMode:
         normalized = value.strip().lower()
-        if normalized not in {"log", "smtp"}:
-            raise ValueError("password_reset_delivery_mode must be one of: log, smtp")
+        if normalized not in {"dev", "log", "smtp"}:
+            raise ValueError("mail_mode must be one of: dev, log, smtp")
         return normalized  # type: ignore[return-value]
 
     @field_validator("session_ttl_days")

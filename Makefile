@@ -45,18 +45,28 @@ migrate: .venv/.deps-stamp
 	@$(ALEMBIC) upgrade head
 
 dev-api: .venv/.deps-stamp
-	@printf '\n[auth-kit] API dev server -> http://127.0.0.1:8000\n\n'
-	@$(UVICORN) auth_kit.main:app --reload --host 0.0.0.0 --port 8000
+	@MAIL_MODE=$$($(PYTHON) -c "from auth_kit.core.config import get_settings; print(get_settings().mail_mode)"); \
+	OUTBOX=$$($(PYTHON) -c "from auth_kit.core.config import get_settings; s=get_settings(); print(s.dev_mail_outbox_path if s.dev_mail_outbox_enabled and s.mail_mode in {'dev', 'log'} else '')"); \
+	printf '\n[auth-kit] API dev server -> http://127.0.0.1:8000\n'; \
+	printf '[auth-kit] Mail mode -> %s\n' "$$MAIL_MODE"; \
+	if [ -n "$$OUTBOX" ]; then printf '[auth-kit] Dev outbox -> %s\n' "$$OUTBOX"; fi; \
+	printf '\n'; \
+	$(UVICORN) auth_kit.main:app --reload --host 0.0.0.0 --port 8000
 
 dev-web: web/.deps-stamp
 	@printf '\n[auth-kit] Web dev server -> http://127.0.0.1:5173\n\n'
 	@$(NPM) run dev -- --host 0.0.0.0 --port 5173
 
 dev: .venv/.deps-stamp web/.deps-stamp
-	@printf '\n[auth-kit] starting API and Web dev servers\n'
-	@printf '[auth-kit] API  -> http://127.0.0.1:8000\n'
-	@printf '[auth-kit] Web  -> http://127.0.0.1:5173\n\n'
-	@trap 'kill 0' EXIT INT TERM; \
+	@MAIL_MODE=$$($(PYTHON) -c "from auth_kit.core.config import get_settings; print(get_settings().mail_mode)"); \
+	OUTBOX=$$($(PYTHON) -c "from auth_kit.core.config import get_settings; s=get_settings(); print(s.dev_mail_outbox_path if s.dev_mail_outbox_enabled and s.mail_mode in {'dev', 'log'} else '')"); \
+	printf '\n[auth-kit] starting API and Web dev servers\n'; \
+	printf '[auth-kit] API  -> http://127.0.0.1:8000\n'; \
+	printf '[auth-kit] Web  -> http://127.0.0.1:5173\n'; \
+	printf '[auth-kit] Mail mode -> %s\n' "$$MAIL_MODE"; \
+	if [ -n "$$OUTBOX" ]; then printf '[auth-kit] Dev outbox -> %s\n' "$$OUTBOX"; fi; \
+	printf '\n'; \
+	trap 'kill 0' EXIT INT TERM; \
 	$(MAKE) --no-print-directory dev-api & \
 	API_PID=$$!; \
 	sleep 1; \

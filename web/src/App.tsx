@@ -516,11 +516,14 @@ function ForgotPasswordPage() {
     setNotice(null);
 
     try {
-      const response = await apiRequest<StatusMessageResponse>("/api/auth/forgot-password", {
+      await apiRequest<StatusMessageResponse>("/api/auth/forgot-password", {
         method: "POST",
         body: JSON.stringify({ email }),
       });
-      setNotice({ severity: "success", message: response.message });
+      setNotice({
+        severity: "success",
+        message: "Wenn ein Konto existiert, wurde eine Reset-Anleitung verschickt.",
+      });
     } catch (error) {
       setNotice({ severity: "error", message: getErrorMessage(error) });
     } finally {
@@ -532,7 +535,7 @@ function ForgotPasswordPage() {
     <AuthCardShell title="Forgot Password" eyebrow="Recovery Flow">
       <>
         <Typography color="text.secondary">
-          Submit your account email. In development mode, reset links are written to the API log output.
+          Submit your account email. In development mode, reset links are written to the backend log and optional dev outbox.
         </Typography>
         {notice ? <Alert severity={notice.severity}>{notice.message}</Alert> : null}
         <Box component="form" onSubmit={handleSubmit}>
