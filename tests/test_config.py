@@ -72,3 +72,28 @@ def test_settings_reads_legacy_prefixed_mail_mode_alias_from_env_file(tmp_path) 
     )
 
     assert settings.mail_mode == "log"
+
+
+def test_settings_require_secure_cookie_for_samesite_none(tmp_path) -> None:
+    with pytest.raises(
+        ValidationError,
+        match="AUTHKIT_SESSION_COOKIE_SAMESITE=none requires AUTHKIT_SESSION_COOKIE_SECURE=true",
+    ):
+        Settings(
+            database_url=f"sqlite+pysqlite:///{tmp_path / 'samesite-none.db'}",
+            session_cookie_samesite="none",
+            session_cookie_secure=False,
+            _env_file=None,
+        )
+
+
+def test_settings_allow_samesite_none_with_secure_cookie(tmp_path) -> None:
+    settings = Settings(
+        database_url=f"sqlite+pysqlite:///{tmp_path / 'samesite-none-secure.db'}",
+        session_cookie_samesite="none",
+        session_cookie_secure=True,
+        _env_file=None,
+    )
+
+    assert settings.session_cookie_samesite == "none"
+    assert settings.session_cookie_secure is True

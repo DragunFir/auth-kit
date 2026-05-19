@@ -61,18 +61,21 @@ AUTHKIT_SMTP_USE_SSL=false
 AUTHKIT_BOOTSTRAP_OWNER_ENABLED=true
 AUTHKIT_BOOTSTRAP_OWNER_EMAIL=owner@example.com
 AUTHKIT_BOOTSTRAP_OWNER_USERNAME=owner
-AUTHKIT_BOOTSTRAP_OWNER_PASSWORD=ChangeMeNow!2026
+AUTHKIT_BOOTSTRAP_OWNER_PASSWORD=CHANGE_ME_LONG_RANDOM_PASSWORD
 AUTHKIT_BOOTSTRAP_OWNER_DISPLAY_NAME="Bootstrap Owner"
 ```
 
 Produktivempfehlungen:
 
+- Nur per HTTPS ausliefern
 - `AUTHKIT_SESSION_COOKIE_SECURE=true`
+- Bei `AUTHKIT_SESSION_COOKIE_SAMESITE=none` ist `AUTHKIT_SESSION_COOKIE_SECURE=true` zwingend
 - `AUTHKIT_SESSION_COOKIE_DOMAIN` leer lassen, wenn das Cookie host-only bleiben soll
 - `AUTHKIT_SESSION_COOKIE_DOMAIN` für Multi-App-NEXUS nur dann setzen, wenn mehrere Subdomains bewusst dasselbe Session-/CSRF-Cookie teilen sollen
 - `AUTHKIT_CORS_ALLOW_ORIGINS` nur auf explizite Origins setzen
 - Bootstrap-Owner nur für initiales Provisioning aktivieren
 - Passwort-Reset in Produktion auf `AUTHKIT_MAIL_MODE=smtp` umstellen
+- Echte SMTP-Zugangsdaten und starke, zufällige Passwörter verwenden
 
 Mail-Modi:
 
@@ -149,6 +152,7 @@ Eigenschaften:
 - Im Dev-Modus (`AUTHKIT_MAIL_MODE=dev` oder `log`) wird keine echte Email versendet
 - Der Reset-Link erscheint im Backend-Log als `[auth-kit] password reset link for <email>: <url>`
 - Optional wird der Link zusätzlich in `data/dev-mail/outbox.jsonl` geschrieben
+- `data/dev-mail/outbox.jsonl` enthält Reset-Links und Tokens und ist als sensible Entwicklungsdatei zu behandeln
 - Für echte Emails müssen `AUTHKIT_MAIL_MODE=smtp` sowie die SMTP-ENV gesetzt sein
 - SMTP-Fehler werden vollständig serverseitig geloggt, aber nicht an den Endnutzer geleakt
 
@@ -163,6 +167,7 @@ Aktiv im aktuellen Stand:
 - Session-Rotation bei erneutem Login
 - CSRF-Schutz für mutierende Requests
 - Rate-Limits für Login, Register, Forgot Password und Reset Password
+- Das aktuelle In-Memory-Rate-Limit ist für Single-Process- und kleine Setups gedacht; für größere Deployments ist ein gemeinsamer Redis- oder DB-basierter Limiter der nächste sinnvolle Schritt
 - Security-Header auf API-Antworten
 - Audit-Logs für Auth- und Sicherheitsereignisse
 - CORS nur über explizite `AUTHKIT_CORS_ALLOW_ORIGINS`

@@ -170,6 +170,9 @@ class Settings(BaseSettings):
 
     @model_validator(mode="after")
     def validate_smtp_settings_for_mode(self) -> Settings:
+        if self.session_cookie_samesite == "none" and not self.session_cookie_secure:
+            raise ValueError("AUTHKIT_SESSION_COOKIE_SAMESITE=none requires AUTHKIT_SESSION_COOKIE_SECURE=true")
+
         if self.mail_mode != "smtp":
             return self
 

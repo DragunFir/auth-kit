@@ -23,6 +23,7 @@ body,
 
 body {
   min-height: 100vh;
+  background-attachment: fixed;
 }
 
 a {
@@ -30,8 +31,48 @@ a {
   text-decoration: none;
 }
 
+#root {
+  isolation: isolate;
+}
+
 .page-enter {
   animation: rise-in 420ms ease both;
+}
+
+.app-shell {
+  position: relative;
+}
+
+.auth-shell {
+  position: relative;
+}
+
+.auth-shell::before,
+.app-shell::before {
+  content: "";
+  position: absolute;
+  inset: -32px auto auto -24px;
+  width: 180px;
+  height: 180px;
+  border-radius: 50%;
+  background: radial-gradient(circle, rgba(94, 234, 212, 0.22), transparent 68%);
+  pointer-events: none;
+  filter: blur(2px);
+}
+
+.page-notice .MuiAlert-message {
+  width: 100%;
+}
+
+.rule-chip-grid {
+  display: grid;
+  gap: 10px;
+}
+
+@media (min-width: 700px) {
+  .rule-chip-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
 }
 
 @keyframes rise-in {

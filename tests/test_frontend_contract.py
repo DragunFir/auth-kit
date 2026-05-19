@@ -16,12 +16,15 @@ def test_forgot_password_uses_neutral_confirmation_message() -> None:
     app_source = Path("web/src/App.tsx").read_text()
 
     assert "Wenn ein Konto existiert, wurde eine Reset-Anleitung verschickt." in app_source
+    assert "development mail log" not in app_source
+    assert "data/dev-mail/outbox.jsonl" not in app_source
 
 
 def test_reset_password_prefills_token_from_url() -> None:
     app_source = Path("web/src/App.tsx").read_text()
 
     assert 'new URLSearchParams(location.search).get("token") ?? ""' in app_source
+    assert "Paste the reset token from the development mail log" not in app_source
 
 
 def test_account_surface_includes_session_controls() -> None:
@@ -37,5 +40,5 @@ def test_admin_surface_exposes_safe_role_and_status_controls_only() -> None:
     assert 'selectedUser.is_active ? "Disable" : "Enable"' in app_source
     assert "toggleRole(adminForm.roles, role)" in app_source
     assert 'label="New password"' in app_source
-    assert "Security Snapshot" in app_source
+    assert "Direct security internals stay server-side." in app_source
     assert 'label="Password Hash"' not in app_source

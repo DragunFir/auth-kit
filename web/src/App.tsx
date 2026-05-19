@@ -311,7 +311,7 @@ function App() {
         </Toolbar>
       </AppBar>
 
-      <Container maxWidth="xl" sx={{ pt: { xs: 4, md: 6 } }}>
+      <Container maxWidth="xl" className="app-shell" sx={{ pt: { xs: 3, md: 5 }, pb: { xs: 3, md: 5 } }}>
         <Routes>
           <Route path="/" element={<Navigate to={me ? "/account" : needsSetup ? "/setup" : "/login"} replace />} />
           <Route
@@ -402,6 +402,88 @@ function RequireAdmin({
   return children;
 }
 
+function NoticeBanner({ notice }: { notice: Notice | null }) {
+  if (!notice) {
+    return null;
+  }
+
+  return (
+    <Alert
+      severity={notice.severity}
+      variant="outlined"
+      className="page-notice"
+      sx={{ alignItems: "flex-start" }}
+    >
+      <Typography variant="body2" sx={{ fontWeight: 600 }}>
+        {notice.message}
+      </Typography>
+    </Alert>
+  );
+}
+
+function PageLead({
+  eyebrow,
+  title,
+  description,
+  actions,
+}: {
+  eyebrow: string;
+  title: string;
+  description: string;
+  actions?: ReactNode;
+}) {
+  return (
+    <Paper
+      variant="outlined"
+      sx={{
+        p: { xs: 2.5, md: 3 },
+        overflow: "hidden",
+        background:
+          "linear-gradient(135deg, rgba(255, 250, 241, 0.94) 0%, rgba(243, 251, 248, 0.86) 100%)",
+      }}
+    >
+      <Stack direction={{ xs: "column", lg: "row" }} spacing={2.5} alignItems={{ lg: "flex-start" }}>
+        <Box sx={{ flexGrow: 1, maxWidth: 820 }}>
+          <Typography variant="overline" color="secondary.main" sx={{ letterSpacing: "0.18em" }}>
+            {eyebrow}
+          </Typography>
+          <Typography variant="h2" sx={{ mb: 1 }}>
+            {title}
+          </Typography>
+          <Typography color="text.secondary">{description}</Typography>
+        </Box>
+        {actions ? (
+          <Stack direction={{ xs: "column", sm: "row" }} spacing={1.25} sx={{ width: { xs: "100%", lg: "auto" } }}>
+            {actions}
+          </Stack>
+        ) : null}
+      </Stack>
+    </Paper>
+  );
+}
+
+function SectionLead({
+  eyebrow,
+  title,
+  description,
+}: {
+  eyebrow: string;
+  title: string;
+  description: string;
+}) {
+  return (
+    <Box sx={{ mb: { xs: 0.5, md: 1 } }}>
+      <Typography variant="overline" color="secondary.main" sx={{ letterSpacing: "0.16em" }}>
+        {eyebrow}
+      </Typography>
+      <Typography variant="h5" sx={{ mb: 0.5 }}>
+        {title}
+      </Typography>
+      <Typography color="text.secondary">{description}</Typography>
+    </Box>
+  );
+}
+
 function AuthCardShell({
   title,
   eyebrow,
@@ -412,8 +494,18 @@ function AuthCardShell({
   children: ReactNode;
 }) {
   return (
-    <Paper className="page-enter" sx={{ p: { xs: 3, md: 4 }, maxWidth: 560, mx: "auto" }}>
-      <Stack spacing={1} mb={3}>
+    <Paper
+      className="auth-shell page-enter"
+      sx={{
+        p: { xs: 3, md: 4.25 },
+        maxWidth: 580,
+        mx: "auto",
+        overflow: "hidden",
+        background:
+          "linear-gradient(155deg, rgba(255, 250, 241, 0.96) 0%, rgba(243, 251, 248, 0.9) 100%)",
+      }}
+    >
+      <Stack spacing={1.25} mb={3.5}>
         <Typography variant="overline" color="secondary.main" sx={{ letterSpacing: "0.18em" }}>
           {eyebrow}
         </Typography>
@@ -426,18 +518,19 @@ function AuthCardShell({
 
 function PasswordRulesPanel() {
   return (
-    <Alert severity="info" variant="outlined">
-      <Typography variant="subtitle2" gutterBottom>
-        Password rules
-      </Typography>
-      <Box component="ul" sx={{ m: 0, pl: 2.5 }}>
-        {passwordRules.map((rule) => (
-          <Typography key={rule} component="li" variant="body2">
-            {rule}
-          </Typography>
-        ))}
-      </Box>
-    </Alert>
+    <Paper
+      variant="outlined"
+      sx={{ p: 2.25, backgroundColor: "rgba(255, 255, 255, 0.34)" }}
+    >
+      <Stack spacing={1.5}>
+        <Typography variant="subtitle2">Password rules</Typography>
+        <Box className="rule-chip-grid">
+          {passwordRules.map((rule) => (
+            <Chip key={rule} label={rule} variant="outlined" size="small" color="primary" />
+          ))}
+        </Box>
+      </Stack>
+    </Paper>
   );
 }
 
@@ -474,9 +567,9 @@ function LoginPage({ onLogin }: { onLogin: (value: MeResponse) => void }) {
         <Typography color="text.secondary">
           Log in to manage your account, profile, sessions and administrative user flows.
         </Typography>
-        {notice ? <Alert severity={notice.severity}>{notice.message}</Alert> : null}
+        <NoticeBanner notice={notice} />
         <Box component="form" onSubmit={handleSubmit}>
-          <Stack spacing={2}>
+          <Stack spacing={2.25}>
             <TextField
               label="Email or Username"
               value={identifier}
@@ -488,15 +581,17 @@ function LoginPage({ onLogin }: { onLogin: (value: MeResponse) => void }) {
               value={password}
               onChange={(event) => setPassword(event.target.value)}
             />
-            <Button type="submit" variant="contained" color="primary" disabled={submitting}>
+            <Button type="submit" variant="contained" color="primary" disabled={submitting} fullWidth>
               {submitting ? "Signing in..." : "Login"}
             </Button>
-            <Button variant="text" onClick={() => navigate("/forgot-password")}>
-              Forgot password
-            </Button>
-            <Button variant="text" color="secondary" onClick={() => navigate("/register")}>
-              Create account
-            </Button>
+            <Stack direction={{ xs: "column", sm: "row" }} spacing={1.25}>
+              <Button variant="text" onClick={() => navigate("/forgot-password")} fullWidth>
+                Forgot password
+              </Button>
+              <Button variant="text" color="secondary" onClick={() => navigate("/register")} fullWidth>
+                Create account
+              </Button>
+            </Stack>
           </Stack>
         </Box>
       </>
@@ -535,21 +630,23 @@ function ForgotPasswordPage() {
     <AuthCardShell title="Forgot Password" eyebrow="Recovery Flow">
       <>
         <Typography color="text.secondary">
-          Submit your account email. In development mode, reset links are written to the backend log and optional dev outbox.
+          Submit your account email to request password reset instructions.
         </Typography>
-        {notice ? <Alert severity={notice.severity}>{notice.message}</Alert> : null}
+        <NoticeBanner notice={notice} />
         <Box component="form" onSubmit={handleSubmit}>
-          <Stack spacing={2}>
+          <Stack spacing={2.25}>
             <TextField label="Email" value={email} onChange={(event) => setEmail(event.target.value)} />
-            <Button type="submit" variant="contained" color="secondary" disabled={submitting}>
+            <Button type="submit" variant="contained" color="secondary" disabled={submitting} fullWidth>
               {submitting ? "Sending..." : "Send reset instructions"}
             </Button>
-            <Button variant="text" onClick={() => navigate("/reset-password")}>
-              I already have a token
-            </Button>
-            <Button variant="text" onClick={() => navigate("/login")}>
-              Back to login
-            </Button>
+            <Stack direction={{ xs: "column", sm: "row" }} spacing={1.25}>
+              <Button variant="text" onClick={() => navigate("/reset-password")} fullWidth>
+                I already have a token
+              </Button>
+              <Button variant="text" onClick={() => navigate("/login")} fullWidth>
+                Back to login
+              </Button>
+            </Stack>
           </Stack>
         </Box>
       </>
@@ -588,12 +685,12 @@ function ResetPasswordPage() {
     <AuthCardShell title="Reset Password" eyebrow="Recovery Flow">
       <>
         <Typography color="text.secondary">
-          Paste the reset token from the development mail log or open the reset link directly.
+          Open a reset link or paste the token you received to choose a new password.
         </Typography>
-        {notice ? <Alert severity={notice.severity}>{notice.message}</Alert> : null}
+        <NoticeBanner notice={notice} />
         <PasswordRulesPanel />
         <Box component="form" onSubmit={handleSubmit}>
-          <Stack spacing={2}>
+          <Stack spacing={2.25}>
             <TextField label="Reset token" value={token} onChange={(event) => setToken(event.target.value)} />
             <TextField
               label="New password"
@@ -601,10 +698,10 @@ function ResetPasswordPage() {
               value={newPassword}
               onChange={(event) => setNewPassword(event.target.value)}
             />
-            <Button type="submit" variant="contained" color="secondary" disabled={submitting}>
+            <Button type="submit" variant="contained" color="secondary" disabled={submitting} fullWidth>
               {submitting ? "Resetting..." : "Reset password"}
             </Button>
-            <Button variant="text" onClick={() => navigate("/login")}>
+            <Button variant="text" onClick={() => navigate("/login")} fullWidth>
               Back to login
             </Button>
           </Stack>
@@ -651,10 +748,10 @@ function SetupOwnerPage({ onOwnerCreated }: { onOwnerCreated: (value: MeResponse
         <Typography color="text.secondary">
           No owner account exists yet. Create the first owner to unlock account and admin management.
         </Typography>
-        {notice ? <Alert severity={notice.severity}>{notice.message}</Alert> : null}
+        <NoticeBanner notice={notice} />
         <PasswordRulesPanel />
         <Box component="form" onSubmit={handleSubmit}>
-          <Stack spacing={2}>
+          <Stack spacing={2.25}>
             <TextField
               label="Email"
               value={form.email}
@@ -676,7 +773,7 @@ function SetupOwnerPage({ onOwnerCreated }: { onOwnerCreated: (value: MeResponse
               value={form.password}
               onChange={(event) => setForm({ ...form, password: event.target.value })}
             />
-            <Button type="submit" variant="contained" color="secondary" disabled={submitting}>
+            <Button type="submit" variant="contained" color="secondary" disabled={submitting} fullWidth>
               {submitting ? "Creating owner..." : "Create first owner"}
             </Button>
           </Stack>
@@ -723,10 +820,10 @@ function RegisterPage({ onRegister }: { onRegister: (value: MeResponse) => void 
         <Typography color="text.secondary">
           Registration creates the base identity and signs you in immediately.
         </Typography>
-        {notice ? <Alert severity={notice.severity}>{notice.message}</Alert> : null}
+        <NoticeBanner notice={notice} />
         <PasswordRulesPanel />
         <Box component="form" onSubmit={handleSubmit}>
-          <Stack spacing={2}>
+          <Stack spacing={2.25}>
             <TextField
               label="Email"
               value={form.email}
@@ -748,10 +845,10 @@ function RegisterPage({ onRegister }: { onRegister: (value: MeResponse) => void 
               value={form.password}
               onChange={(event) => setForm({ ...form, password: event.target.value })}
             />
-            <Button type="submit" variant="contained" color="secondary" disabled={submitting}>
+            <Button type="submit" variant="contained" color="secondary" disabled={submitting} fullWidth>
               {submitting ? "Creating..." : "Register"}
             </Button>
-            <Button variant="text" onClick={() => navigate("/login")}>
+            <Button variant="text" onClick={() => navigate("/login")} fullWidth>
               Back to login
             </Button>
           </Stack>
@@ -1064,26 +1161,33 @@ function AccountPage({ me, onRefreshMe }: { me: MeResponse; onRefreshMe: () => P
   }
 
   return (
-    <Stack spacing={3} className="page-enter">
-      <Stack direction={{ xs: "column", md: "row" }} spacing={2} alignItems={{ md: "center" }}>
-        <Box sx={{ flexGrow: 1 }}>
-          <Typography variant="overline" color="secondary.main" sx={{ letterSpacing: "0.18em" }}>
-            Account Surface
-          </Typography>
-          <Typography variant="h2">Identity, profile and session control</Typography>
-        </Box>
-        <Button
-          variant="outlined"
-          startIcon={<RefreshRoundedIcon />}
-          onClick={() => void loadAccountData()}
-        >
-          Refresh
-        </Button>
-      </Stack>
+    <Stack spacing={3.5} className="page-enter">
+      <PageLead
+        eyebrow="Account"
+        title="Identity, profile and session control"
+        description="Manage your everyday account data, avatar, password and active sessions from one place."
+        actions={
+          <Button
+            variant="outlined"
+            startIcon={<RefreshRoundedIcon />}
+            onClick={() => void loadAccountData()}
+            fullWidth
+          >
+            Refresh
+          </Button>
+        }
+      />
 
-      {notice ? <Alert severity={notice.severity}>{notice.message}</Alert> : null}
+      <NoticeBanner notice={notice} />
 
-      <Grid container spacing={3}>
+      <Grid container spacing={{ xs: 2.5, md: 3 }}>
+        <Grid size={{ xs: 12 }}>
+          <SectionLead
+            eyebrow="Account"
+            title="Profile and identity"
+            description="Core identity data, avatar upload and public profile settings."
+          />
+        </Grid>
         <Grid size={{ xs: 12, lg: 4 }}>
           <Card>
             <CardHeader title="Identity" subheader="Base data from /api/auth/me" />
@@ -1121,29 +1225,52 @@ function AccountPage({ me, onRefreshMe }: { me: MeResponse; onRefreshMe: () => P
           <Card>
             <CardHeader title="Profile" subheader="Edit display profile and upload an avatar image" />
             <CardContent>
-              <Stack spacing={2}>
-                <Stack direction={{ xs: "column", md: "row" }} spacing={2} alignItems={{ md: "center" }}>
-                  <Button component="label" variant="outlined" color="secondary">
-                    Choose avatar file
-                    <input
-                      hidden
-                      type="file"
-                      accept="image/png,image/jpeg,image/webp"
-                      onChange={(event) => setAvatarFile(event.target.files?.[0] ?? null)}
-                    />
-                  </Button>
-                  <Typography variant="body2" color="text.secondary" sx={{ flexGrow: 1 }}>
-                    {avatarFile ? avatarFile.name : "PNG, JPEG or WebP. Upload replaces the current local avatar."}
-                  </Typography>
-                  <Button
-                    variant="contained"
-                    color="secondary"
-                    disabled={!avatarFile || avatarUploading}
-                    onClick={() => void uploadAvatar()}
-                  >
-                    {avatarUploading ? "Uploading..." : "Upload avatar"}
-                  </Button>
-                </Stack>
+              <Stack spacing={2.25}>
+                <Paper
+                  variant="outlined"
+                  sx={{
+                    p: 2,
+                    borderStyle: "dashed",
+                    backgroundColor: "rgba(255, 255, 255, 0.34)",
+                  }}
+                >
+                  <Stack direction={{ xs: "column", md: "row" }} spacing={2} alignItems={{ md: "center" }}>
+                    <Avatar
+                      src={profile.avatar_url || undefined}
+                      sx={{ width: 72, height: 72, bgcolor: "secondary.main" }}
+                    >
+                      {(me.display_name || me.username).slice(0, 1).toUpperCase()}
+                    </Avatar>
+                    <Box sx={{ flexGrow: 1 }}>
+                      <Typography variant="subtitle1">Avatar</Typography>
+                      <Typography variant="body2" color="text.secondary">
+                        {avatarFile
+                          ? `Selected file: ${avatarFile.name}`
+                          : "PNG, JPEG or WebP. Upload replaces the current avatar preview."}
+                      </Typography>
+                    </Box>
+                    <Stack direction={{ xs: "column", sm: "row" }} spacing={1.25} sx={{ width: { xs: "100%", md: "auto" } }}>
+                      <Button component="label" variant="outlined" color="secondary" fullWidth>
+                        Choose file
+                        <input
+                          hidden
+                          type="file"
+                          accept="image/png,image/jpeg,image/webp"
+                          onChange={(event) => setAvatarFile(event.target.files?.[0] ?? null)}
+                        />
+                      </Button>
+                      <Button
+                        variant="contained"
+                        color="secondary"
+                        disabled={!avatarFile || avatarUploading}
+                        onClick={() => void uploadAvatar()}
+                        fullWidth
+                      >
+                        {avatarUploading ? "Uploading..." : "Upload avatar"}
+                      </Button>
+                    </Stack>
+                  </Stack>
+                </Paper>
                 <TextField
                   label="Bio"
                   multiline
@@ -1175,6 +1302,13 @@ function AccountPage({ me, onRefreshMe }: { me: MeResponse; onRefreshMe: () => P
           </Card>
         </Grid>
 
+        <Grid size={{ xs: 12 }}>
+          <SectionLead
+            eyebrow="Account"
+            title="Contact and preferences"
+            description="Day-to-day profile metadata and presentation settings."
+          />
+        </Grid>
         <Grid size={{ xs: 12, md: 6 }}>
           <Card>
             <CardHeader title="Contact" subheader="Phone, website and web handles" />
@@ -1241,11 +1375,18 @@ function AccountPage({ me, onRefreshMe }: { me: MeResponse; onRefreshMe: () => P
           </Card>
         </Grid>
 
+        <Grid size={{ xs: 12 }}>
+          <SectionLead
+            eyebrow="Security"
+            title="Password and active access"
+            description="Update account protection settings and end sessions from trusted devices."
+          />
+        </Grid>
         <Grid size={{ xs: 12, md: 6 }}>
           <Card>
-            <CardHeader title="Security Flags" subheader="Simple editable security state" />
+            <CardHeader title="Security" subheader="Account protection preferences" />
             <CardContent>
-              <Stack spacing={1}>
+              <Stack spacing={1.25}>
                 <FormControlLabel
                   control={
                     <Switch
@@ -1306,9 +1447,10 @@ function AccountPage({ me, onRefreshMe }: { me: MeResponse; onRefreshMe: () => P
 
         <Grid size={{ xs: 12, md: 6 }}>
           <Card>
-            <CardHeader title="Password" subheader="Change the current account password" />
+            <CardHeader title="Password" subheader="Rotate the current account password" />
             <CardContent>
-              <Stack spacing={2}>
+              <Stack spacing={2.25}>
+                <PasswordRulesPanel />
                 <TextField
                   label="Current password"
                   type="password"
@@ -1333,6 +1475,13 @@ function AccountPage({ me, onRefreshMe }: { me: MeResponse; onRefreshMe: () => P
           </Card>
         </Grid>
 
+        <Grid size={{ xs: 12 }}>
+          <SectionLead
+            eyebrow="Address Book"
+            title="Addresses"
+            description="Manage shipping, billing and default address records."
+          />
+        </Grid>
         <Grid size={{ xs: 12 }}>
           <Card>
             <CardHeader title="Addresses" subheader="Multiple addresses per user" />
@@ -1785,35 +1934,38 @@ function AdminUsersPage({ currentUser }: { currentUser: MeResponse }) {
   }
 
   return (
-    <Stack spacing={3} className="page-enter">
-      <Stack direction={{ xs: "column", md: "row" }} spacing={2} alignItems={{ md: "center" }}>
-        <Box sx={{ flexGrow: 1 }}>
-          <Typography variant="overline" color="secondary.main" sx={{ letterSpacing: "0.18em" }}>
-            Admin Console
-          </Typography>
-          <Typography variant="h2">Users, roles and account operations</Typography>
-        </Box>
-        <Chip label={`Signed in as ${currentUser.username}`} color="primary" variant="outlined" />
-        <Button
-          variant="outlined"
-          startIcon={<RefreshRoundedIcon />}
-          onClick={() => void loadUsers()}
-        >
-          Refresh
-        </Button>
-        <Button
-          variant="contained"
-          color="secondary"
-          startIcon={<AddCircleOutlineRoundedIcon />}
-          onClick={() => setCreateOpen(true)}
-        >
-          Create user
-        </Button>
-      </Stack>
+    <Stack spacing={3.5} className="page-enter">
+      <PageLead
+        eyebrow="Admin"
+        title="Users, roles and account operations"
+        description="Manage account status, roles and editable profile data without surfacing internal security implementation details."
+        actions={
+          <>
+            <Chip label={`Signed in as ${currentUser.username}`} color="primary" variant="outlined" />
+            <Button
+              variant="outlined"
+              startIcon={<RefreshRoundedIcon />}
+              onClick={() => void loadUsers()}
+              fullWidth
+            >
+              Refresh
+            </Button>
+            <Button
+              variant="contained"
+              color="secondary"
+              startIcon={<AddCircleOutlineRoundedIcon />}
+              onClick={() => setCreateOpen(true)}
+              fullWidth
+            >
+              Create user
+            </Button>
+          </>
+        }
+      />
 
-      {notice ? <Alert severity={notice.severity}>{notice.message}</Alert> : null}
+      <NoticeBanner notice={notice} />
 
-      <Grid container spacing={3}>
+      <Grid container spacing={{ xs: 2.5, md: 3 }}>
         <Grid size={{ xs: 12, lg: 4 }}>
           <Card>
             <CardHeader title="User List" subheader="Filter and select a user" />
@@ -1851,7 +2003,7 @@ function AdminUsersPage({ currentUser }: { currentUser: MeResponse }) {
                 title={selectedUser.display_name || selectedUser.username}
                 subheader={`User #${selectedUser.id}`}
                 action={
-                  <Stack direction="row" spacing={1}>
+                  <Stack direction={{ xs: "column", sm: "row" }} spacing={1}>
                     <Button variant="outlined" onClick={() => void toggleUserActive()}>
                       {selectedUser.is_active ? "Disable" : "Enable"}
                     </Button>
@@ -2080,23 +2232,9 @@ function AdminUsersPage({ currentUser }: { currentUser: MeResponse }) {
 
                   <Grid size={{ xs: 12 }}>
                     <Divider sx={{ my: 1 }} />
-                    <Typography variant="h6" gutterBottom>
-                      Security Snapshot
-                    </Typography>
-                    <Stack direction="row" spacing={1} flexWrap="wrap">
-                      <Chip
-                        label={`2FA: ${selectedUser.security?.two_factor_enabled ? "on" : "off"}`}
-                      />
-                      <Chip
-                        label={`Passkeys: ${selectedUser.security?.passkeys_enabled ? "on" : "off"}`}
-                      />
-                      <Chip
-                        label={`Recovery Codes: ${selectedUser.security?.recovery_codes_enabled ? "on" : "off"}`}
-                      />
-                      <Chip
-                        label={`Trusted Devices: ${selectedUser.security?.trusted_devices_enabled ? "on" : "off"}`}
-                      />
-                    </Stack>
+                    <Alert severity="info" variant="outlined">
+                      Direct security internals stay server-side. This admin surface only exposes status changes, roles and password resets.
+                    </Alert>
                   </Grid>
 
                   <Grid size={{ xs: 12 }}>

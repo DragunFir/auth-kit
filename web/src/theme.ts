@@ -15,7 +15,7 @@ export const appTheme = createTheme({
     },
     background: {
       default: "#f5efe4",
-      paper: "rgba(255, 250, 241, 0.86)",
+      paper: "rgba(255, 250, 241, 0.9)",
     },
     text: {
       primary: "#172554",
@@ -56,11 +56,56 @@ export const appTheme = createTheme({
         },
       },
     },
+    MuiCard: {
+      styleOverrides: {
+        root: {
+          height: "100%",
+          borderRadius: 26,
+          overflow: "hidden",
+        },
+      },
+    },
+    MuiCardHeader: {
+      styleOverrides: {
+        root: {
+          padding: "22px 22px 0",
+        },
+        title: {
+          fontSize: "1.05rem",
+          fontWeight: 700,
+        },
+        subheader: {
+          marginTop: 4,
+        },
+        action: {
+          marginTop: 0,
+          marginRight: 0,
+        },
+      },
+    },
+    MuiCardContent: {
+      styleOverrides: {
+        root: {
+          padding: 22,
+          "&:last-child": {
+            paddingBottom: 22,
+          },
+        },
+      },
+    },
     MuiButton: {
       styleOverrides: {
         root: {
           borderRadius: 999,
           paddingInline: 18,
+          minHeight: 42,
+        },
+      },
+    },
+    MuiAlert: {
+      styleOverrides: {
+        root: {
+          borderRadius: 20,
         },
       },
     },
