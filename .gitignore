@@ -1,8 +1,8 @@
 .env
 *.db
 *.sqlite
-data/uploads/
 data/
+data/uploads/
 .idea/
 .venv/
 __pycache__/
