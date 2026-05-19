@@ -93,6 +93,11 @@ export interface ApiErrorShape {
   details?: Array<Record<string, unknown>>;
 }
 
+export interface StatusMessageResponse {
+  ok: boolean;
+  message: string;
+}
+
 export interface SetupStatusResponse {
   needs_setup: boolean;
   has_owner: boolean;

@@ -7,15 +7,29 @@ from fastapi.responses import FileResponse
 from sqlalchemy.orm import Session
 
 from ..core.config import Settings
-from ..deps import AuthContext, current_auth, get_db, get_settings_dep
+from ..deps import (
+    AuthContext,
+    current_auth,
+    get_db,
+    get_settings_dep,
+    limit_forgot_password_requests,
+    limit_login_requests,
+    limit_register_requests,
+    limit_reset_password_requests,
+    require_csrf_protection,
+)
 from ..errors import ApiError
 from ..models import AuthSession
 from ..schemas import (
     AuthMePublic,
     ChangePasswordRequest,
+    CsrfTokenResponse,
+    ForgotPasswordRequest,
     LoginRequest,
     RegisterRequest,
+    ResetPasswordRequest,
     SessionPublic,
+    StatusMessageResponse,
     StatusResponse,
     UserAddressCreateRequest,
     UserAddressPatchRequest,
@@ -36,18 +50,24 @@ from ..services import (
     avatar_media_type,
     avatar_storage_path,
     change_user_password,
+    clear_csrf_cookie,
     clear_session_cookie,
+    create_password_reset_token,
     create_session_for_user,
     create_user_address,
     delete_user_address,
+    deliver_password_reset_email,
     ensure_user_details,
     get_avatar_profile_or_404,
     get_profile_avatar_or_404,
     get_user_address_or_404,
+    get_user_by_email,
+    issue_csrf_token,
     list_active_sessions_for_user,
     list_user_addresses,
     log_event,
     register_user,
+    reset_password_with_token,
     revoke_session,
     set_session_cookie,
     store_user_avatar,
@@ -58,7 +78,7 @@ from ..services import (
     update_user_security,
 )
 
-router = APIRouter(prefix="/auth", tags=["auth"])
+router = APIRouter(prefix="/auth", tags=["auth"], dependencies=[Depends(require_csrf_protection)])
 
 
 def _session_to_public(session: AuthSession, *, current_session_id: UUID) -> SessionPublic:
@@ -74,7 +94,12 @@ def _session_to_public(session: AuthSession, *, current_session_id: UUID) -> Ses
     )
 
 
-@router.post("/register", response_model=UserPublic, status_code=status.HTTP_201_CREATED)
+@router.get("/csrf", response_model=CsrfTokenResponse)
+def get_csrf_token(response: Response, settings: Settings = Depends(get_settings_dep)) -> CsrfTokenResponse:
+    return CsrfTokenResponse(csrf_token=issue_csrf_token(response, settings))
+
+
+@router.post("/register", response_model=UserPublic, status_code=status.HTTP_201_CREATED, dependencies=[Depends(limit_register_requests)])
 def register(
     payload: RegisterRequest,
     request: Request,
@@ -104,7 +129,7 @@ def register(
     return UserPublic.model_validate(user)
 
 
-@router.post("/login", response_model=UserPublic)
+@router.post("/login", response_model=UserPublic, dependencies=[Depends(limit_login_requests)])
 def login(
     payload: LoginRequest,
     request: Request,
@@ -112,7 +137,26 @@ def login(
     db: Session = Depends(get_db),
     settings: Settings = Depends(get_settings_dep),
 ) -> UserPublic:
-    user = authenticate_user(db, identifier=payload.identifier, password=payload.password)
+    try:
+        user = authenticate_user(db, identifier=payload.identifier, password=payload.password)
+    except ApiError:
+        log_event(
+            db,
+            event_type="auth.login_failed",
+            request=request,
+            metadata={"identifier": payload.identifier.strip().lower()},
+        )
+        db.commit()
+        raise
+
+    raw_cookie = request.cookies.get(settings.session_cookie_name)
+    if raw_cookie:
+        from ..deps import _resolve_auth_context
+
+        current_auth_context = _resolve_auth_context(db, settings, raw_cookie)
+        if current_auth_context is not None:
+            revoke_session(current_auth_context.session)
+
     _, raw_token = create_session_for_user(db, user=user, request=request, settings=settings)
     log_event(
         db,
@@ -149,6 +193,7 @@ def logout(
             )
             db.commit()
     clear_session_cookie(response, settings)
+    clear_csrf_cookie(response, settings)
     return StatusResponse()
 
 
@@ -184,6 +229,93 @@ def change_password(
     )
     db.commit()
     return StatusResponse()
+
+
+@router.post(
+    "/forgot-password",
+    response_model=StatusMessageResponse,
+    dependencies=[Depends(limit_forgot_password_requests)],
+)
+def forgot_password(
+    payload: ForgotPasswordRequest,
+    request: Request,
+    db: Session = Depends(get_db),
+    settings: Settings = Depends(get_settings_dep),
+) -> StatusMessageResponse:
+    response_message = "If an account exists for that email, reset instructions will be sent."
+    user = get_user_by_email(db, str(payload.email))
+    if user is None:
+        log_event(
+            db,
+            event_type="auth.password_reset_requested_unknown_email",
+            request=request,
+            metadata={"email": str(payload.email).strip().lower()},
+        )
+        db.commit()
+        return StatusMessageResponse(message=response_message)
+
+    raw_token = create_password_reset_token(db, user=user, request=request, settings=settings)
+    log_event(
+        db,
+        event_type="auth.password_reset_requested",
+        actor_user_id=user.id,
+        target_user_id=user.id,
+        request=request,
+    )
+    try:
+        deliver_password_reset_email(email=user.email, raw_token=raw_token, settings=settings)
+    except Exception as exc:
+        log_event(
+            db,
+            event_type="auth.password_reset_delivery_failed",
+            actor_user_id=user.id,
+            target_user_id=user.id,
+            request=request,
+            metadata={"error": type(exc).__name__},
+        )
+        db.commit()
+        return StatusMessageResponse(message=response_message)
+
+    db.commit()
+    return StatusMessageResponse(message=response_message)
+
+
+@router.post(
+    "/reset-password",
+    response_model=StatusMessageResponse,
+    dependencies=[Depends(limit_reset_password_requests)],
+)
+def reset_password(
+    payload: ResetPasswordRequest,
+    request: Request,
+    db: Session = Depends(get_db),
+    settings: Settings = Depends(get_settings_dep),
+) -> StatusMessageResponse:
+    try:
+        user = reset_password_with_token(
+            db,
+            raw_token=payload.token,
+            new_password=payload.new_password,
+            settings=settings,
+        )
+    except ApiError:
+        log_event(
+            db,
+            event_type="auth.password_reset_failed",
+            request=request,
+        )
+        db.commit()
+        raise
+
+    log_event(
+        db,
+        event_type="auth.password_reset_completed",
+        actor_user_id=user.id,
+        target_user_id=user.id,
+        request=request,
+    )
+    db.commit()
+    return StatusMessageResponse(message="Password has been reset. You can now sign in.")
 
 
 @router.get("/sessions", response_model=list[SessionPublic])
@@ -503,6 +635,7 @@ def revoke_named_session(
     db.commit()
     if session.id == auth.session.id:
         clear_session_cookie(response, settings)
+        clear_csrf_cookie(response, settings)
     response.status_code = status.HTTP_204_NO_CONTENT
     return response
 
@@ -526,5 +659,6 @@ def revoke_current_session(
     )
     db.commit()
     clear_session_cookie(response, settings)
+    clear_csrf_cookie(response, settings)
     response.status_code = status.HTTP_204_NO_CONTENT
     return response

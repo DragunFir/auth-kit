@@ -4,11 +4,11 @@ from fastapi import APIRouter, Depends, Request, Response, status
 from sqlalchemy.orm import Session
 
 from ..core.config import Settings
-from ..deps import get_db, get_settings_dep
+from ..deps import get_db, get_settings_dep, require_csrf_protection
 from ..schemas import SetupOwnerRequest, SetupStatusResponse, UserPublic
 from ..services import create_initial_owner, create_session_for_user, log_event, set_session_cookie, setup_status
 
-router = APIRouter(prefix="/setup", tags=["setup"])
+router = APIRouter(prefix="/setup", tags=["setup"], dependencies=[Depends(require_csrf_protection)])
 
 
 @router.get("/status", response_model=SetupStatusResponse)

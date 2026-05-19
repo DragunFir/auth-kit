@@ -1,10 +1,14 @@
 from __future__ import annotations
 
+import logging
+import smtplib
 from datetime import timedelta
+from email.message import EmailMessage
 from pathlib import Path
 from secrets import choice
 from string import ascii_lowercase
 from typing import Any, TypeGuard
+from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 from uuid import UUID, uuid4
 
 from fastapi import Request, Response
@@ -16,6 +20,7 @@ from .db import utcnow
 from .errors import ApiError
 from .models import (
     AuthAuditLog,
+    AuthPasswordResetToken,
     AuthSession,
     AuthUser,
     AuthUserAddress,
@@ -25,8 +30,11 @@ from .models import (
     AuthUserSecurity,
 )
 from .security import (
+    generate_csrf_token,
+    generate_password_reset_token,
     generate_session_token,
     hash_password,
+    hash_password_reset_token,
     hash_session_token,
     normalize_email,
     normalize_roles,
@@ -34,6 +42,8 @@ from .security import (
     validate_password,
     verify_password,
 )
+
+logger = logging.getLogger(__name__)
 
 
 class UnsetType:
@@ -83,9 +93,36 @@ def set_session_cookie(response: Response, settings: Settings, raw_token: str) -
     )
 
 
+def set_csrf_cookie(response: Response, settings: Settings, csrf_token: str) -> None:
+    response.set_cookie(
+        key=settings.csrf_cookie_name,
+        value=csrf_token,
+        httponly=False,
+        secure=settings.session_cookie_secure,
+        samesite=settings.session_cookie_samesite,
+        domain=settings.session_cookie_domain,
+        max_age=settings.session_ttl_days * 24 * 3600,
+        path=settings.session_cookie_path,
+    )
+
+
+def issue_csrf_token(response: Response, settings: Settings) -> str:
+    csrf_token = generate_csrf_token()
+    set_csrf_cookie(response, settings, csrf_token)
+    return csrf_token
+
+
 def clear_session_cookie(response: Response, settings: Settings) -> None:
     response.delete_cookie(
         key=settings.session_cookie_name,
+        path=settings.session_cookie_path,
+        domain=settings.session_cookie_domain,
+    )
+
+
+def clear_csrf_cookie(response: Response, settings: Settings) -> None:
+    response.delete_cookie(
+        key=settings.csrf_cookie_name,
         path=settings.session_cookie_path,
         domain=settings.session_cookie_domain,
     )
@@ -125,8 +162,14 @@ def log_event(
 
 def get_user_by_identifier(db: Session, identifier: str) -> AuthUser | None:
     normalized = identifier.strip().lower()
-    stmt = select(AuthUser).where(or_(AuthUser.email == normalized, AuthUser.username == normalized))
-    return db.scalar(stmt)
+    user = db.scalar(select(AuthUser).where(AuthUser.email == normalized))
+    if user is not None:
+        return user
+    return db.scalar(select(AuthUser).where(AuthUser.username == normalized))
+
+
+def get_user_by_email(db: Session, email: str) -> AuthUser | None:
+    return db.scalar(select(AuthUser).where(AuthUser.email == normalize_email(email)))
 
 
 def get_user_or_404(db: Session, user_id: int) -> AuthUser:
@@ -150,10 +193,17 @@ def ensure_unique_identity(
     username: str,
     exclude_user_id: int | None = None,
 ) -> None:
-    stmt = select(AuthUser).where(or_(AuthUser.email == email, AuthUser.username == username))
+    stmt = select(AuthUser).where(
+        or_(
+            AuthUser.email == email,
+            AuthUser.username == username,
+            AuthUser.email == username,
+            AuthUser.username == email,
+        )
+    )
     for user in db.scalars(stmt):
         if exclude_user_id is None or user.id != exclude_user_id:
-            if user.email == email:
+            if user.email in {email, username}:
                 raise ApiError(status_code=409, error_code="email_already_exists", message="Email already exists.")
             raise ApiError(status_code=409, error_code="username_already_exists", message="Username already exists.")
 
@@ -220,6 +270,46 @@ def create_session_for_user(
     db.add(session)
     db.flush()
     return session, raw_token
+
+
+def build_password_reset_url(settings: Settings, raw_token: str) -> str:
+    base_url = settings.password_reset_url_base or "http://127.0.0.1:5173/reset-password"
+    parts = urlsplit(base_url)
+    query_items = dict(parse_qsl(parts.query, keep_blank_values=True))
+    query_items["token"] = raw_token
+    return urlunsplit((parts.scheme, parts.netloc, parts.path, urlencode(query_items), parts.fragment))
+
+
+def deliver_password_reset_email(*, email: str, raw_token: str, settings: Settings) -> None:
+    reset_url = build_password_reset_url(settings, raw_token)
+    subject = "auth-kit password reset"
+    body = (
+        "A password reset was requested for your auth-kit account.\n\n"
+        f"Reset URL: {reset_url}\n"
+        f"Reset token: {raw_token}\n"
+        f"Token expires in {settings.password_reset_ttl_minutes} minutes.\n"
+    )
+
+    if settings.password_reset_delivery_mode == "log":
+        logger.info("Password reset mail for %s\n%s", email, body)
+        return
+
+    if not settings.smtp_host or not settings.smtp_from_email:
+        raise RuntimeError("SMTP delivery requires AUTHKIT_SMTP_HOST and AUTHKIT_SMTP_FROM_EMAIL")
+
+    message = EmailMessage()
+    message["Subject"] = subject
+    message["From"] = f"{settings.smtp_from_name} <{settings.smtp_from_email}>" if settings.smtp_from_name else settings.smtp_from_email
+    message["To"] = email
+    message.set_content(body)
+
+    smtp_cls = smtplib.SMTP_SSL if settings.smtp_use_ssl else smtplib.SMTP
+    with smtp_cls(settings.smtp_host, settings.smtp_port, timeout=10) as server:
+        if not settings.smtp_use_ssl and settings.smtp_use_starttls:
+            server.starttls()
+        if settings.smtp_username and settings.smtp_password:
+            server.login(settings.smtp_username, settings.smtp_password)
+        server.send_message(message)
 
 
 def revoke_session(session: AuthSession) -> None:
@@ -324,7 +414,89 @@ def change_user_password(
         )
     user.password_hash = hash_password(new_password)
     user.updated_at = utcnow()
+    invalidate_password_reset_tokens(db, user_id=user.id)
     revoke_user_sessions(db, user_id=user.id, except_session_id=current_session_id)
+
+
+def invalidate_password_reset_tokens(db: Session, *, user_id: int) -> int:
+    now = utcnow()
+    stmt = select(AuthPasswordResetToken).where(
+        AuthPasswordResetToken.user_id == user_id,
+        AuthPasswordResetToken.consumed_at.is_(None),
+    )
+    invalidated = 0
+    for token in db.scalars(stmt):
+        token.consumed_at = now
+        token.updated_at = now
+        invalidated += 1
+    return invalidated
+
+
+def create_password_reset_token(
+    db: Session,
+    *,
+    user: AuthUser,
+    request: Request | None,
+    settings: Settings,
+) -> str:
+    invalidate_password_reset_tokens(db, user_id=user.id)
+    raw_token = generate_password_reset_token()
+    db.add(
+        AuthPasswordResetToken(
+            user=user,
+            token_hash=hash_password_reset_token(raw_token),
+            expires_at=utcnow() + timedelta(minutes=settings.password_reset_ttl_minutes),
+            requested_by_ip=get_client_ip(request),
+            user_agent=request.headers.get("user-agent") if request else None,
+        )
+    )
+    db.flush()
+    return raw_token
+
+
+def reset_password_with_token(
+    db: Session,
+    *,
+    raw_token: str,
+    new_password: str,
+    settings: Settings,
+) -> AuthUser:
+    token_hash = hash_password_reset_token(raw_token)
+    stmt = (
+        select(AuthPasswordResetToken)
+        .join(AuthUser, AuthUser.id == AuthPasswordResetToken.user_id)
+        .where(
+            AuthPasswordResetToken.token_hash == token_hash,
+            AuthPasswordResetToken.consumed_at.is_(None),
+            AuthPasswordResetToken.expires_at > utcnow(),
+        )
+    )
+    reset_token = db.scalar(stmt)
+    if reset_token is None:
+        raise ApiError(
+            status_code=400,
+            error_code="password_reset_token_invalid",
+            message="Reset token is invalid or expired.",
+        )
+
+    user = reset_token.user
+    validate_password(new_password, email=user.email, username=user.username, settings=settings)
+    if verify_password(new_password, user.password_hash):
+        raise ApiError(
+            status_code=400,
+            error_code="password_unchanged",
+            message="New password must differ from the current password.",
+        )
+
+    now = utcnow()
+    user.password_hash = hash_password(new_password)
+    user.updated_at = now
+    reset_token.consumed_at = now
+    reset_token.updated_at = now
+    invalidate_password_reset_tokens(db, user_id=user.id)
+    revoke_user_sessions(db, user_id=user.id)
+    db.flush()
+    return user
 
 
 def create_admin_user(
@@ -764,6 +936,7 @@ def admin_reset_password(
     validate_password(new_password, email=target.email, username=target.username, settings=settings)
     target.password_hash = hash_password(new_password)
     target.updated_at = utcnow()
+    invalidate_password_reset_tokens(db, user_id=target.id)
     revoke_user_sessions(db, user_id=target.id)
 
 

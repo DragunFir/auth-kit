@@ -99,5 +99,21 @@ def generate_session_token() -> str:
     return secrets.token_urlsafe(32)
 
 
-def hash_session_token(token: str) -> str:
+def generate_csrf_token() -> str:
+    return secrets.token_urlsafe(32)
+
+
+def generate_password_reset_token() -> str:
+    return secrets.token_urlsafe(48)
+
+
+def hash_token(token: str) -> str:
     return hashlib.sha256(token.encode("utf-8")).hexdigest()
+
+
+def hash_session_token(token: str) -> str:
+    return hash_token(token)
+
+
+def hash_password_reset_token(token: str) -> str:
+    return hash_token(token)

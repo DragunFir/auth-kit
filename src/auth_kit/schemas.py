@@ -121,6 +121,15 @@ class ChangePasswordRequest(RequestModel):
     new_password: str = Field(min_length=1)
 
 
+class ForgotPasswordRequest(RequestModel):
+    email: EmailStr
+
+
+class ResetPasswordRequest(RequestModel):
+    token: str = Field(min_length=1)
+    new_password: str = Field(min_length=1)
+
+
 class UserProfilePatchRequest(RequestModel):
     bio: str | None = Field(default=None, max_length=4000)
     locale: str | None = Field(default=None, max_length=32)
@@ -200,6 +209,10 @@ class StatusResponse(ResponseModel):
     ok: bool = True
 
 
+class StatusMessageResponse(StatusResponse):
+    message: str
+
+
 class ErrorResponse(BaseModel):
     error_code: str
     message: str
@@ -214,6 +227,10 @@ class HealthResponse(ResponseModel):
 class VersionResponse(ResponseModel):
     name: str
     version: str
+
+
+class CsrfTokenResponse(ResponseModel):
+    csrf_token: str
 
 
 class SetupStatusResponse(ResponseModel):

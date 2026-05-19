@@ -10,6 +10,15 @@ from auth_kit.core.config import Settings
 from auth_kit.db import Base
 
 
+def _api_request(client: TestClient, method: str, path: str, settings: Settings, **kwargs):
+    headers = dict(kwargs.pop("headers", {}))
+    if method.upper() not in {"GET", "HEAD", "OPTIONS"}:
+        csrf = client.get("/api/auth/csrf")
+        assert csrf.status_code == 200
+        headers.setdefault(settings.csrf_header_name, csrf.json()["csrf_token"])
+    return client.request(method, path, headers=headers, **kwargs)
+
+
 def test_setup_status_and_initial_owner_creation(settings_factory: Callable[..., Settings]) -> None:
     settings = settings_factory(
         bootstrap_owner_enabled=False,
@@ -27,8 +36,11 @@ def test_setup_status_and_initial_owner_creation(settings_factory: Callable[...,
         assert status_before.status_code == 200
         assert status_before.json() == {"needs_setup": True, "has_owner": False}
 
-        created = client.post(
+        created = _api_request(
+            client,
+            "POST",
             "/api/setup/owner",
+            settings,
             json={
                 "email": "first-owner@example.com",
                 "username": "firstowner",
@@ -64,8 +76,11 @@ def test_setup_owner_creation_is_blocked_after_owner_exists(settings_factory: Ca
     app = create_app(settings)
 
     with TestClient(app) as client:
-        first = client.post(
+        first = _api_request(
+            client,
+            "POST",
             "/api/setup/owner",
+            settings,
             json={
                 "email": "first-owner@example.com",
                 "username": "firstowner",
@@ -75,8 +90,11 @@ def test_setup_owner_creation_is_blocked_after_owner_exists(settings_factory: Ca
         )
         assert first.status_code == 201
 
-        second = client.post(
+        second = _api_request(
+            client,
+            "POST",
             "/api/setup/owner",
+            settings,
             json={
                 "email": "second-owner@example.com",
                 "username": "secondowner",

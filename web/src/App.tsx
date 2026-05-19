@@ -59,6 +59,7 @@ import type {
   MeResponse,
   SetupStatusResponse,
   SessionInfo,
+  StatusMessageResponse,
   UserAddress,
   UserContact,
   UserPreferences,
@@ -335,6 +336,14 @@ function App() {
             element={me ? <Navigate to="/account" replace /> : needsSetup ? <Navigate to="/setup" replace /> : <LoginPage onLogin={setMe} />}
           />
           <Route
+            path="/forgot-password"
+            element={me ? <Navigate to="/account" replace /> : needsSetup ? <Navigate to="/setup" replace /> : <ForgotPasswordPage />}
+          />
+          <Route
+            path="/reset-password"
+            element={me ? <Navigate to="/account" replace /> : needsSetup ? <Navigate to="/setup" replace /> : <ResetPasswordPage />}
+          />
+          <Route
             path="/register"
             element={me ? <Navigate to="/account" replace /> : needsSetup ? <Navigate to="/setup" replace /> : <RegisterPage onRegister={setMe} />}
           />
@@ -482,8 +491,118 @@ function LoginPage({ onLogin }: { onLogin: (value: MeResponse) => void }) {
             <Button type="submit" variant="contained" color="primary" disabled={submitting}>
               {submitting ? "Signing in..." : "Login"}
             </Button>
+            <Button variant="text" onClick={() => navigate("/forgot-password")}>
+              Forgot password
+            </Button>
             <Button variant="text" color="secondary" onClick={() => navigate("/register")}>
               Create account
+            </Button>
+          </Stack>
+        </Box>
+      </>
+    </AuthCardShell>
+  );
+}
+
+function ForgotPasswordPage() {
+  const navigate = useNavigate();
+  const [email, setEmail] = useState("");
+  const [notice, setNotice] = useState<Notice | null>(null);
+  const [submitting, setSubmitting] = useState(false);
+
+  async function handleSubmit(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    setSubmitting(true);
+    setNotice(null);
+
+    try {
+      const response = await apiRequest<StatusMessageResponse>("/api/auth/forgot-password", {
+        method: "POST",
+        body: JSON.stringify({ email }),
+      });
+      setNotice({ severity: "success", message: response.message });
+    } catch (error) {
+      setNotice({ severity: "error", message: getErrorMessage(error) });
+    } finally {
+      setSubmitting(false);
+    }
+  }
+
+  return (
+    <AuthCardShell title="Forgot Password" eyebrow="Recovery Flow">
+      <>
+        <Typography color="text.secondary">
+          Submit your account email. In development mode, reset links are written to the API log output.
+        </Typography>
+        {notice ? <Alert severity={notice.severity}>{notice.message}</Alert> : null}
+        <Box component="form" onSubmit={handleSubmit}>
+          <Stack spacing={2}>
+            <TextField label="Email" value={email} onChange={(event) => setEmail(event.target.value)} />
+            <Button type="submit" variant="contained" color="secondary" disabled={submitting}>
+              {submitting ? "Sending..." : "Send reset instructions"}
+            </Button>
+            <Button variant="text" onClick={() => navigate("/reset-password")}>
+              I already have a token
+            </Button>
+            <Button variant="text" onClick={() => navigate("/login")}>
+              Back to login
+            </Button>
+          </Stack>
+        </Box>
+      </>
+    </AuthCardShell>
+  );
+}
+
+function ResetPasswordPage() {
+  const location = useLocation();
+  const navigate = useNavigate();
+  const [token, setToken] = useState(() => new URLSearchParams(location.search).get("token") ?? "");
+  const [newPassword, setNewPassword] = useState("");
+  const [notice, setNotice] = useState<Notice | null>(null);
+  const [submitting, setSubmitting] = useState(false);
+
+  async function handleSubmit(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    setSubmitting(true);
+    setNotice(null);
+
+    try {
+      const response = await apiRequest<StatusMessageResponse>("/api/auth/reset-password", {
+        method: "POST",
+        body: JSON.stringify({ token, new_password: newPassword }),
+      });
+      setNewPassword("");
+      setNotice({ severity: "success", message: response.message });
+    } catch (error) {
+      setNotice({ severity: "error", message: getErrorMessage(error) });
+    } finally {
+      setSubmitting(false);
+    }
+  }
+
+  return (
+    <AuthCardShell title="Reset Password" eyebrow="Recovery Flow">
+      <>
+        <Typography color="text.secondary">
+          Paste the reset token from the development mail log or open the reset link directly.
+        </Typography>
+        {notice ? <Alert severity={notice.severity}>{notice.message}</Alert> : null}
+        <PasswordRulesPanel />
+        <Box component="form" onSubmit={handleSubmit}>
+          <Stack spacing={2}>
+            <TextField label="Reset token" value={token} onChange={(event) => setToken(event.target.value)} />
+            <TextField
+              label="New password"
+              type="password"
+              value={newPassword}
+              onChange={(event) => setNewPassword(event.target.value)}
+            />
+            <Button type="submit" variant="contained" color="secondary" disabled={submitting}>
+              {submitting ? "Resetting..." : "Reset password"}
+            </Button>
+            <Button variant="text" onClick={() => navigate("/login")}>
+              Back to login
             </Button>
           </Stack>
         </Box>
@@ -596,7 +715,7 @@ function RegisterPage({ onRegister }: { onRegister: (value: MeResponse) => void 
   }
 
   return (
-    <AuthCardShell title="Create Account" eyebrow="auth-kit v2">
+    <AuthCardShell title="Create Account" eyebrow="auth-kit 1.0">
       <>
         <Typography color="text.secondary">
           Registration creates the base identity and signs you in immediately.

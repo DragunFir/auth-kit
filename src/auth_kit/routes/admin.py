@@ -5,7 +5,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from ..core.config import Settings
-from ..deps import AuthContext, get_db, get_settings_dep, require_admin
+from ..deps import AuthContext, get_db, get_settings_dep, require_admin, require_csrf_protection
 from ..models import AuthUser
 from ..schemas import (
     AdminCreateUserRequest,
@@ -29,7 +29,7 @@ from ..services import (
     update_user_profile,
 )
 
-router = APIRouter(prefix="/admin", tags=["admin"])
+router = APIRouter(prefix="/admin", tags=["admin"], dependencies=[Depends(require_csrf_protection)])
 
 
 @router.get("/users", response_model=list[UserPublic])

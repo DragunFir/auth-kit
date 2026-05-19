@@ -5,11 +5,13 @@ from pathlib import Path
 
 from fastapi import FastAPI, HTTPException
 from fastapi.exceptions import RequestValidationError
+from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
 from .core.config import Settings, get_settings
 from .db import create_db_engine, create_session_factory
 from .errors import ApiError
+from .rate_limit import InMemoryRateLimiter
 from .router import api_router
 from .services import ensure_bootstrap_owner
 
@@ -49,9 +51,40 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         version=app_settings.app_version,
         lifespan=lifespan,
     )
+    if app_settings.cors_allow_origins:
+        app.add_middleware(
+            CORSMiddleware,
+            allow_origins=app_settings.cors_allow_origins,
+            allow_credentials=True,
+            allow_methods=["GET", "POST", "PATCH", "DELETE", "OPTIONS"],
+            allow_headers=["Content-Type", app_settings.csrf_header_name],
+        )
     app.state.settings = app_settings
     app.state.db_engine = engine
     app.state.session_factory = session_factory
+    app.state.rate_limiter = InMemoryRateLimiter()
+
+    @app.middleware("http")
+    async def apply_security_headers(request, call_next):
+        response = await call_next(request)
+        response.headers.setdefault("X-Frame-Options", "DENY")
+        response.headers.setdefault("X-Content-Type-Options", "nosniff")
+        response.headers.setdefault("Referrer-Policy", "strict-origin-when-cross-origin")
+        response.headers.setdefault("Permissions-Policy", "camera=(), microphone=(), geolocation=()")
+        response.headers.setdefault("Cross-Origin-Opener-Policy", "same-origin")
+        response.headers.setdefault(
+            "Content-Security-Policy",
+            "default-src 'none'; frame-ancestors 'none'; base-uri 'none'; form-action 'self'",
+        )
+        if app_settings.session_cookie_secure:
+            response.headers.setdefault(
+                "Strict-Transport-Security",
+                f"max-age={app_settings.security_hsts_max_age}; includeSubDomains",
+            )
+        if request.url.path.startswith("/api/auth") or request.url.path.startswith("/api/admin"):
+            response.headers.setdefault("Cache-Control", "no-store")
+            response.headers.setdefault("Pragma", "no-cache")
+        return response
 
     @app.exception_handler(ApiError)
     async def handle_api_error(_: object, exc: ApiError) -> JSONResponse:

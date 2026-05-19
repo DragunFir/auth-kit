@@ -1,47 +1,34 @@
-# auth-kit v2
+# auth-kit 1.0
 
-auth-kit v2 ist ein eigenständiges Identity-, Profil-, Rollen- und Session-System mit FastAPI-Backend und eigener React-Weboberfläche.
+auth-kit ist ein eigenständiger Auth-, Profil-, Rollen- und Session-Service mit FastAPI-Backend, Alembic-Migrationen und React-Weboberfläche.
 
-Es verwaltet:
+Der aktuelle Stand umfasst:
 
-- Login und Registrierung
-- Benutzeridentität und Profile
-- Adressen, Kontakt- und Webdaten
-- Preferences und Security-Status
-- Sessions/Geräte
-- Admin-Userverwaltung und Rollen
+- Registrierung und Login mit serverseitigen Cookie-Sessions
+- Profil-, Avatar-, Kontakt-, Präferenz- und Adressverwaltung
+- Admin-Userverwaltung mit Rollen (`user`, `admin`, `owner`)
+- Passwort-Änderung und Passwort-zurücksetzen-Flow
+- Audit-Logs, Rate-Limits, CSRF-Schutz und Security-Header
 
-Andere Apps können auth-kit später optional nutzen, aber auth-kit bringt keine Fachlogik fremder Anwendungen mit.
+OIDC/SSO ist im aktuellen Release nicht umgesetzt und wird hier bewusst nicht dokumentiert.
 
-## Setup
-
-1. Python-Venv anlegen:
+## Schnellstart
 
 ```bash
 python3 -m venv .venv
-```
-
-2. Backend-Dependencies installieren:
-
-```bash
 .venv/bin/pip install -e '.[dev]'
-```
-
-3. Frontend-Dependencies installieren:
-
-```bash
 npm --prefix web install
 ```
 
-Alternativ installiert `make setup` beide Seiten:
+Alternativ:
 
 ```bash
 make setup
 ```
 
-## ENV
+## Umgebung
 
-Eine lokale Basis-Konfiguration liegt in [.env.example](/srv/dev/auth-kit/.env.example).
+Die Basis-Konfiguration liegt in `.env.example`. Alle Variablen nutzen das Prefix `AUTHKIT_`.
 
 Wichtige Variablen:
 
@@ -51,43 +38,43 @@ AUTHKIT_SESSION_COOKIE_NAME=authkit_sid
 AUTHKIT_SESSION_COOKIE_SECURE=false
 AUTHKIT_SESSION_COOKIE_SAMESITE=lax
 AUTHKIT_SESSION_TTL_DAYS=30
+AUTHKIT_CORS_ALLOW_ORIGINS=http://127.0.0.1:5173,http://localhost:5173
 AUTHKIT_UPLOAD_DIR=./data/uploads
 AUTHKIT_AVATAR_MAX_MB=5
+
+AUTHKIT_PASSWORD_RESET_TTL_MINUTES=30
+AUTHKIT_PASSWORD_RESET_DELIVERY_MODE=log
+AUTHKIT_PASSWORD_RESET_URL_BASE=http://127.0.0.1:5173/reset-password
 
 AUTHKIT_BOOTSTRAP_OWNER_ENABLED=true
 AUTHKIT_BOOTSTRAP_OWNER_EMAIL=owner@example.com
 AUTHKIT_BOOTSTRAP_OWNER_USERNAME=owner
-AUTHKIT_BOOTSTRAP_OWNER_PASSWORD=PrimaryPass!123
+AUTHKIT_BOOTSTRAP_OWNER_PASSWORD=ChangeMeNow!2026
 AUTHKIT_BOOTSTRAP_OWNER_DISPLAY_NAME="Bootstrap Owner"
 ```
 
-## Datenbank starten
+Produktivempfehlungen:
 
-Für die lokale Entwicklung liegt eine Postgres-Definition in [docker-compose.yml](/srv/dev/auth-kit/docker-compose.yml).
+- `AUTHKIT_SESSION_COOKIE_SECURE=true`
+- `AUTHKIT_CORS_ALLOW_ORIGINS` nur auf explizite Origins setzen
+- Bootstrap-Owner nur für initiales Provisioning aktivieren
+- Passwort-Reset in Produktion auf `AUTHKIT_PASSWORD_RESET_DELIVERY_MODE=smtp` umstellen
 
-Start:
+Optionale SMTP-Variablen sind in `.env.example` vorbereitet.
+
+## Entwicklung
+
+Postgres lokal starten:
 
 ```bash
 make db-up
 ```
 
-Stop:
-
-```bash
-make db-down
-```
-
-## Migrationen
-
-Migrationen werden mit Alembic ausgeführt:
+Migrationen ausführen:
 
 ```bash
 make migrate
 ```
-
-`make migrate` und `make dev-api` lesen beide dieselbe `AUTHKIT_DATABASE_URL` aus der Shell-Umgebung oder aus `.env`.
-
-## Entwicklung
 
 Backend starten:
 
@@ -101,7 +88,7 @@ Frontend starten:
 make dev-web
 ```
 
-Backend und Frontend zusammen starten:
+Beides zusammen:
 
 ```bash
 make dev
@@ -112,17 +99,58 @@ Standardports:
 - API: `http://127.0.0.1:8000`
 - Web: `http://127.0.0.1:5173`
 
-Die Vite-Entwicklung nutzt einen Proxy auf `/api` zum FastAPI-Backend. Avatare werden über kontrollierte API-Endpunkte unter `/api/auth/...` ausgeliefert, nicht über direkt sichtbare Dateipfade.
+Die Vite-Entwicklung nutzt `/api` per Proxy. Avatare werden ausschließlich über kontrollierte API-Routen ausgeliefert.
 
-Wenn noch kein Owner existiert, zeigt die Weboberfläche automatisch einen First-Owner-Setup-Flow über `/api/setup/status` und `/api/setup/owner`.
+## Passwort-Reset
 
-## Tests
+Die API stellt bereit:
+
+- `POST /api/auth/forgot-password`
+- `POST /api/auth/reset-password`
+
+Eigenschaften:
+
+- Reset-Tokens werden nur gehasht gespeichert
+- TTL ist per ENV konfigurierbar
+- Responses vermeiden Email-Enumeration
+- Der Entwicklungsmodus schreibt Reset-Links in den API-Log
+- SMTP-Zustellung ist vorbereitet
+
+Die Weboberfläche enthält einen vollständigen Forgot-/Reset-Flow.
+
+## Security
+
+Aktiv im aktuellen Stand:
+
+- Argon2id für Passwort-Hashing
+- serverseitige Session-Invalidierung bei Logout
+- Session-Rotation bei erneutem Login
+- CSRF-Schutz für mutierende Requests
+- Rate-Limits für Login, Register, Forgot Password und Reset Password
+- Security-Header auf API-Antworten
+- Audit-Logs für Auth- und Sicherheitsereignisse
+- CORS nur über explizite `AUTHKIT_CORS_ALLOW_ORIGINS`
+
+## Historie / Rotation
+
+Frühere Commits enthielten versehentlich Laufzeit-Artefakte und sensible Entwicklungswerte, darunter `.env`, `auth-kit.db`, `data/uploads/` und `.idea/`.
+
+Betroffene Historie:
+
+- `183792c`
+- `6b0460f`
+
+Behandle daraus abgeleitete Zugangsdaten als kompromittiert. Insbesondere muss jedes live verwendete Bootstrap-Owner-Passwort rotiert werden.
+
+## Qualitätssicherung
+
+Tests:
 
 ```bash
 make test
 ```
 
-## Lint / Format / Typecheck
+Checks:
 
 ```bash
 make check
@@ -136,30 +164,3 @@ make check
 - `npm run lint`
 - `npm run typecheck`
 - `npm run build`
-
-## Frontend-Struktur
-
-Die Weboberfläche liegt unter [web](/srv/dev/auth-kit/web) und enthält:
-
-- Login und Registrierung
-- `/me`- und Account-Ansicht
-- Profil-, Avatar-, Kontakt- und Preferences-Editoren
-- Adressverwaltung
-- Session-/Geräteübersicht
-- Admin-Userliste und Admin-Editor
-- Rollenverwaltung
-
-## Backend-Struktur
-
-Das Backend liegt unter [src/auth_kit](/srv/dev/auth-kit/src/auth_kit) und setzt auf:
-
-- FastAPI
-- SQLAlchemy 2.x
-- Alembic
-- Pydantic v2
-- Argon2id
-
-Architektur und Backend-Plan:
-
-- [auth-kit-v2.md](/srv/dev/auth-kit/docs/architecture/auth-kit-v2.md)
-- [auth-kit-v2-backend-plan.md](/srv/dev/auth-kit/docs/architecture/auth-kit-v2-backend-plan.md)

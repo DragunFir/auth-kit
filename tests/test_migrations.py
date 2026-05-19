@@ -22,6 +22,7 @@ def test_alembic_upgrade_creates_v2_schema(tmp_path) -> None:
         "auth_user",
         "auth_session",
         "auth_audit_log",
+        "auth_password_reset_token",
         "auth_user_profile",
         "auth_user_address",
         "auth_user_contact",
@@ -34,4 +35,7 @@ def test_alembic_upgrade_creates_v2_schema(tmp_path) -> None:
 
     session_columns = {column["name"] for column in inspector.get_columns("auth_session")}
     assert "updated_at" in session_columns
+
+    reset_columns = {column["name"] for column in inspector.get_columns("auth_password_reset_token")}
+    assert {"user_id", "token_hash", "expires_at", "consumed_at", "created_at", "updated_at"} <= reset_columns
     engine.dispose()

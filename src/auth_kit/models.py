@@ -35,6 +35,10 @@ class AuthUser(TimestampMixin, Base):
         back_populates="user",
         cascade="all, delete-orphan",
     )
+    password_reset_tokens: Mapped[list[AuthPasswordResetToken]] = relationship(
+        back_populates="user",
+        cascade="all, delete-orphan",
+    )
     profile: Mapped[AuthUserProfile | None] = relationship(
         back_populates="user",
         cascade="all, delete-orphan",
@@ -90,6 +94,20 @@ class AuthAuditLog(TimestampMixin, Base):
     ip_address: Mapped[str | None] = mapped_column(String(64), nullable=True)
     user_agent: Mapped[str | None] = mapped_column(Text, nullable=True)
     metadata_json: Mapped[dict[str, object]] = mapped_column(MutableDict.as_mutable(JSON), default=dict)
+
+
+class AuthPasswordResetToken(TimestampMixin, Base):
+    __tablename__ = "auth_password_reset_token"
+
+    id: Mapped[UUID] = mapped_column(Uuid, primary_key=True, default=uuid4)
+    user_id: Mapped[int] = mapped_column(ForeignKey("auth_user.id", ondelete="CASCADE"), index=True)
+    token_hash: Mapped[str] = mapped_column(String(64), unique=True, index=True)
+    expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), index=True)
+    consumed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    requested_by_ip: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    user_agent: Mapped[str | None] = mapped_column(Text, nullable=True)
+
+    user: Mapped[AuthUser] = relationship(back_populates="password_reset_tokens")
 
 
 class AuthUserProfile(TimestampMixin, Base):
