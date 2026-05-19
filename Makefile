@@ -6,7 +6,7 @@ UVICORN := .venv/bin/uvicorn
 ALEMBIC := .venv/bin/alembic
 NPM := npm --prefix web
 
-.PHONY: setup db-up db-down migrate dev-api dev-web dev test check
+.PHONY: setup db-up db-down migrate dev-api dev-web dev test test-mail check
 
 .venv/bin/python:
 	python3 -m venv .venv
@@ -77,6 +77,14 @@ dev: .venv/.deps-stamp web/.deps-stamp
 test: .venv/.deps-stamp
 	@printf '\n[auth-kit] running backend tests\n\n'
 	@$(PYTHON) -m pytest
+
+test-mail: .venv/.deps-stamp
+	@if [ -z "$(TO)" ]; then \
+		printf '\n[auth-kit] usage: make test-mail TO=user@example.com\n'; \
+		exit 2; \
+	fi
+	@printf '\n[auth-kit] sending SMTP test mail to %s\n\n' "$(TO)"
+	@$(PYTHON) -m auth_kit.mail_cli --to "$(TO)"
 
 check: .venv/.deps-stamp web/.deps-stamp
 	@printf '\n[auth-kit] running lint, format and type checks\n\n'

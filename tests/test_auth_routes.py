@@ -57,6 +57,42 @@ def test_csrf_required_for_mutating_requests(client: TestClient) -> None:
     assert response.json()["error_code"] == "csrf_invalid"
 
 
+def test_session_cookie_omits_domain_when_setting_is_empty(settings_factory) -> None:
+    settings = settings_factory(session_cookie_domain="")
+    engine = create_engine(settings.database_url, connect_args={"check_same_thread": False})
+    Base.metadata.create_all(engine)
+    app = create_app(settings)
+
+    with TestClient(app) as client:
+        register = _custom_api_request(client, settings, "POST", "/api/auth/register", json=_register_payload())
+        assert register.status_code == 201
+        assert "Domain=" not in register.headers["set-cookie"]
+
+        csrf = client.get("/api/auth/csrf")
+        assert csrf.status_code == 200
+        assert "Domain=" not in csrf.headers["set-cookie"]
+
+    engine.dispose()
+
+
+def test_session_cookie_includes_domain_when_configured(settings_factory) -> None:
+    settings = settings_factory(session_cookie_domain="auth.nexus.example")
+    engine = create_engine(settings.database_url, connect_args={"check_same_thread": False})
+    Base.metadata.create_all(engine)
+    app = create_app(settings)
+
+    with TestClient(app, base_url="http://auth.nexus.example") as client:
+        register = _custom_api_request(client, settings, "POST", "/api/auth/register", json=_register_payload())
+        assert register.status_code == 201
+        assert "Domain=auth.nexus.example" in register.headers["set-cookie"]
+
+        csrf = client.get("/api/auth/csrf")
+        assert csrf.status_code == 200
+        assert "Domain=auth.nexus.example" in csrf.headers["set-cookie"]
+
+    engine.dispose()
+
+
 def test_register_profile_preferences_contact_security_and_me(client: TestClient, api_request) -> None:
     assert api_request(client, "PATCH", "/api/auth/profile", json={"bio": "blocked"}).status_code == 401
 
@@ -599,6 +635,188 @@ def test_rate_limit_blocks_repeated_login_requests(settings_factory) -> None:
         )
         assert second.status_code == 429
         assert second.json()["error_code"] == "rate_limit_exceeded"
+
+    engine.dispose()
+
+
+def test_csrf_covers_authenticated_auth_mutations(app, client: TestClient, api_request) -> None:
+    assert (
+        api_request(
+            client,
+            "POST",
+            "/api/auth/register",
+            json=_register_payload(email="csrf@example.com", username="csrfuser"),
+        ).status_code
+        == 201
+    )
+
+    created_address = api_request(
+        client,
+        "POST",
+        "/api/auth/addresses",
+        json={
+            "type": "shipping",
+            "street_line_1": "CSRF Street 1",
+            "postal_code": "10115",
+            "city": "Berlin",
+            "country": "DE",
+            "is_default": True,
+        },
+    )
+    assert created_address.status_code == 201
+    address_id = created_address.json()["id"]
+
+    with TestClient(app) as second_client:
+        assert (
+            api_request(
+                second_client,
+                "POST",
+                "/api/auth/login",
+                json={"identifier": "csrf@example.com", "password": "StrongPassword!123"},
+            ).status_code
+            == 200
+        )
+        other_session = next(item for item in client.get("/api/auth/sessions").json() if item["is_current"] is False)
+
+    mutation_checks = [
+        ("POST", "/api/auth/logout", {}),
+        (
+            "POST",
+            "/api/auth/change-password",
+            {"json": {"current_password": "StrongPassword!123", "new_password": "EvenStronger!456"}},
+        ),
+        ("PATCH", "/api/auth/profile", {"json": {"bio": "blocked"}}),
+        ("POST", "/api/auth/profile/avatar", {"files": {"avatar": ("avatar.png", b"avatar", "image/png")}}),
+        (
+            "POST",
+            "/api/auth/addresses",
+            {
+                "json": {
+                    "type": "billing",
+                    "street_line_1": "Second Street 2",
+                    "postal_code": "20095",
+                    "city": "Hamburg",
+                    "country": "DE",
+                    "is_default": False,
+                }
+            },
+        ),
+        ("PATCH", f"/api/auth/addresses/{address_id}", {"json": {"city": "Munich"}}),
+        ("DELETE", f"/api/auth/addresses/{address_id}", {}),
+        ("PATCH", "/api/auth/contact", {"json": {"phone": "+49 30 555"}}),
+        ("PATCH", "/api/auth/preferences", {"json": {"theme": "neutral"}}),
+        ("PATCH", "/api/auth/security", {"json": {"two_factor_enabled": True}}),
+        ("DELETE", f"/api/auth/sessions/{other_session['id']}", {}),
+        ("DELETE", "/api/auth/sessions/current", {}),
+    ]
+
+    for method, path, kwargs in mutation_checks:
+        response = client.request(method, path, **kwargs)
+        assert response.status_code == 403, f"{method} {path} should require CSRF"
+        assert response.json()["error_code"] == "csrf_invalid"
+
+
+def test_csrf_covers_authenticated_admin_mutations(client: TestClient, api_request) -> None:
+    assert (
+        api_request(
+            client,
+            "POST",
+            "/api/auth/login",
+            json={"identifier": "owner@example.com", "password": OWNER_PASSWORD},
+        ).status_code
+        == 200
+    )
+
+    created_user = api_request(
+        client,
+        "POST",
+        "/api/admin/users",
+        json={
+            "email": "managed@example.com",
+            "username": "managed",
+            "display_name": "Managed User",
+            "password": "StrongPassword!123",
+            "roles": ["user"],
+            "is_active": True,
+            "is_verified": True,
+        },
+    )
+    assert created_user.status_code == 201
+    user_id = created_user.json()["id"]
+
+    admin_mutation_checks = [
+        (
+            "POST",
+            "/api/admin/users",
+            {
+                "json": {
+                    "email": "another@example.com",
+                    "username": "another",
+                    "display_name": "Another User",
+                    "password": "StrongPassword!123",
+                    "roles": ["user"],
+                    "is_active": True,
+                    "is_verified": True,
+                }
+            },
+        ),
+        ("PATCH", f"/api/admin/users/{user_id}", {"json": {"display_name": "Blocked Update"}}),
+        ("POST", f"/api/admin/users/{user_id}/reset-password", {"json": {"new_password": "ResetPassword!456"}}),
+        ("POST", f"/api/admin/users/{user_id}/disable", {}),
+        ("POST", f"/api/admin/users/{user_id}/enable", {}),
+    ]
+
+    for method, path, kwargs in admin_mutation_checks:
+        response = client.request(method, path, **kwargs)
+        assert response.status_code == 403, f"{method} {path} should require CSRF"
+        assert response.json()["error_code"] == "csrf_invalid"
+
+
+def test_forgot_password_logs_full_smtp_errors_without_leaking_to_user(settings_factory, monkeypatch, caplog) -> None:
+    settings = settings_factory(
+        mail_mode="smtp",
+        smtp_host="smtp.example.com",
+        smtp_port=587,
+        smtp_username="mailer",
+        smtp_password="secret",
+        smtp_from_email="no-reply@example.com",
+    )
+    engine = create_engine(settings.database_url, connect_args={"check_same_thread": False})
+    Base.metadata.create_all(engine)
+    app = create_app(settings)
+
+    def fail_send(*, to_email: str, subject: str, body: str, settings: Settings) -> None:
+        raise RuntimeError("SMTP exploded")
+
+    monkeypatch.setattr("auth_kit.services.send_smtp_email", fail_send)
+
+    with TestClient(app) as client:
+        assert (
+            _custom_api_request(
+                client,
+                settings,
+                "POST",
+                "/api/auth/register",
+                json=_register_payload(email="smtp@example.com", username="smtpuser"),
+            ).status_code
+            == 201
+        )
+
+        with caplog.at_level(logging.ERROR):
+            forgot = _custom_api_request(
+                client,
+                settings,
+                "POST",
+                "/api/auth/forgot-password",
+                json={"email": "smtp@example.com"},
+            )
+
+        assert forgot.status_code == 200
+        assert forgot.json()["message"] == "If an account exists for that email, reset instructions will be sent."
+        assert "SMTP exploded" not in forgot.text
+        assert "[auth-kit] password reset delivery failed for smtp@example.com using mail_mode=smtp" in caplog.text
+        assert "SMTP exploded" in caplog.text
+
     engine.dispose()
 
 

@@ -4,7 +4,7 @@ from functools import lru_cache
 from importlib.metadata import PackageNotFoundError, version
 from typing import Any, Literal
 
-from pydantic import AliasChoices, Field, field_validator
+from pydantic import AliasChoices, Field, field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 SameSiteMode = Literal["lax", "strict", "none"]
@@ -61,7 +61,7 @@ class Settings(BaseSettings):
     dev_mail_outbox_enabled: bool = True
     dev_mail_outbox_path: str = "./data/dev-mail/outbox.jsonl"
     smtp_host: str | None = None
-    smtp_port: int = 587
+    smtp_port: int | None = None
     smtp_username: str | None = None
     smtp_password: str | None = None
     smtp_from_email: str | None = None
@@ -87,6 +87,25 @@ class Settings(BaseSettings):
         if normalized not in {"lax", "strict", "none"}:
             raise ValueError("session_cookie_samesite must be one of: lax, strict, none")
         return normalized  # type: ignore[return-value]
+
+    @field_validator(
+        "session_cookie_domain",
+        "password_reset_url_base",
+        "smtp_host",
+        "smtp_username",
+        "smtp_password",
+        "smtp_from_email",
+        "smtp_from_name",
+        mode="before",
+    )
+    @classmethod
+    def normalize_optional_strings(cls, value: Any) -> Any:
+        if value is None:
+            return None
+        if isinstance(value, str):
+            normalized = value.strip()
+            return normalized or None
+        return value
 
     @field_validator("cors_allow_origins", mode="before")
     @classmethod
@@ -128,9 +147,15 @@ class Settings(BaseSettings):
             raise ValueError("avatar_max_mb must be >= 1")
         return value
 
+    @field_validator("smtp_port")
+    @classmethod
+    def validate_smtp_port(cls, value: int | None) -> int | None:
+        if value is not None and value < 1:
+            raise ValueError("smtp_port must be >= 1")
+        return value
+
     @field_validator(
         "security_hsts_max_age",
-        "smtp_port",
         "rate_limit_window_seconds",
         "rate_limit_login",
         "rate_limit_register",
@@ -142,6 +167,29 @@ class Settings(BaseSettings):
         if value < 1:
             raise ValueError("numeric security settings must be >= 1")
         return value
+
+    @model_validator(mode="after")
+    def validate_smtp_settings_for_mode(self) -> Settings:
+        if self.mail_mode != "smtp":
+            return self
+
+        missing: list[str] = []
+        if not self.smtp_host:
+            missing.append("AUTHKIT_SMTP_HOST")
+        if self.smtp_port is None:
+            missing.append("AUTHKIT_SMTP_PORT")
+        if not self.smtp_username:
+            missing.append("AUTHKIT_SMTP_USERNAME")
+        if not self.smtp_password:
+            missing.append("AUTHKIT_SMTP_PASSWORD")
+        if not self.smtp_from_email:
+            missing.append("AUTHKIT_SMTP_FROM_EMAIL")
+
+        if missing:
+            joined = ", ".join(missing)
+            raise ValueError(f"AUTHKIT_MAIL_MODE=smtp requires the following settings: {joined}")
+
+        return self
 
 
 @lru_cache(maxsize=1)

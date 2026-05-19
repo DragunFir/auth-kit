@@ -82,26 +82,50 @@ def build_avatar_storage_key() -> tuple[str, str]:
 
 
 def set_session_cookie(response: Response, settings: Settings, raw_token: str) -> None:
+    if settings.session_cookie_domain:
+        response.set_cookie(
+            key=settings.session_cookie_name,
+            value=raw_token,
+            httponly=True,
+            secure=settings.session_cookie_secure,
+            samesite=settings.session_cookie_samesite,
+            domain=settings.session_cookie_domain,
+            max_age=settings.session_ttl_days * 24 * 3600,
+            path=settings.session_cookie_path,
+        )
+        return
+
     response.set_cookie(
         key=settings.session_cookie_name,
         value=raw_token,
         httponly=True,
         secure=settings.session_cookie_secure,
         samesite=settings.session_cookie_samesite,
-        domain=settings.session_cookie_domain,
         max_age=settings.session_ttl_days * 24 * 3600,
         path=settings.session_cookie_path,
     )
 
 
 def set_csrf_cookie(response: Response, settings: Settings, csrf_token: str) -> None:
+    if settings.session_cookie_domain:
+        response.set_cookie(
+            key=settings.csrf_cookie_name,
+            value=csrf_token,
+            httponly=False,
+            secure=settings.session_cookie_secure,
+            samesite=settings.session_cookie_samesite,
+            domain=settings.session_cookie_domain,
+            max_age=settings.session_ttl_days * 24 * 3600,
+            path=settings.session_cookie_path,
+        )
+        return
+
     response.set_cookie(
         key=settings.csrf_cookie_name,
         value=csrf_token,
         httponly=False,
         secure=settings.session_cookie_secure,
         samesite=settings.session_cookie_samesite,
-        domain=settings.session_cookie_domain,
         max_age=settings.session_ttl_days * 24 * 3600,
         path=settings.session_cookie_path,
     )
@@ -114,18 +138,32 @@ def issue_csrf_token(response: Response, settings: Settings) -> str:
 
 
 def clear_session_cookie(response: Response, settings: Settings) -> None:
+    if settings.session_cookie_domain:
+        response.delete_cookie(
+            key=settings.session_cookie_name,
+            path=settings.session_cookie_path,
+            domain=settings.session_cookie_domain,
+        )
+        return
+
     response.delete_cookie(
         key=settings.session_cookie_name,
         path=settings.session_cookie_path,
-        domain=settings.session_cookie_domain,
     )
 
 
 def clear_csrf_cookie(response: Response, settings: Settings) -> None:
+    if settings.session_cookie_domain:
+        response.delete_cookie(
+            key=settings.csrf_cookie_name,
+            path=settings.session_cookie_path,
+            domain=settings.session_cookie_domain,
+        )
+        return
+
     response.delete_cookie(
         key=settings.csrf_cookie_name,
         path=settings.session_cookie_path,
-        domain=settings.session_cookie_domain,
     )
 
 
@@ -281,6 +319,50 @@ def build_password_reset_url(settings: Settings, raw_token: str) -> str:
     return urlunsplit((parts.scheme, parts.netloc, parts.path, urlencode(query_items), parts.fragment))
 
 
+def ensure_smtp_configuration(settings: Settings) -> None:
+    missing: list[str] = []
+    if not settings.smtp_host:
+        missing.append("AUTHKIT_SMTP_HOST")
+    if settings.smtp_port is None:
+        missing.append("AUTHKIT_SMTP_PORT")
+    if not settings.smtp_username:
+        missing.append("AUTHKIT_SMTP_USERNAME")
+    if not settings.smtp_password:
+        missing.append("AUTHKIT_SMTP_PASSWORD")
+    if not settings.smtp_from_email:
+        missing.append("AUTHKIT_SMTP_FROM_EMAIL")
+    if missing:
+        raise RuntimeError(f"SMTP delivery requires the following settings: {', '.join(missing)}")
+
+
+def send_smtp_email(
+    *,
+    to_email: str,
+    subject: str,
+    body: str,
+    settings: Settings,
+) -> None:
+    ensure_smtp_configuration(settings)
+    assert settings.smtp_host is not None
+    assert settings.smtp_port is not None
+    assert settings.smtp_username is not None
+    assert settings.smtp_password is not None
+    assert settings.smtp_from_email is not None
+
+    message = EmailMessage()
+    message["Subject"] = subject
+    message["From"] = f"{settings.smtp_from_name} <{settings.smtp_from_email}>" if settings.smtp_from_name else settings.smtp_from_email
+    message["To"] = to_email
+    message.set_content(body)
+
+    smtp_cls = smtplib.SMTP_SSL if settings.smtp_use_ssl else smtplib.SMTP
+    with smtp_cls(settings.smtp_host, settings.smtp_port, timeout=10) as server:
+        if not settings.smtp_use_ssl and settings.smtp_use_starttls:
+            server.starttls()
+        server.login(settings.smtp_username, settings.smtp_password)
+        server.send_message(message)
+
+
 def append_dev_mail_outbox(*, email: str, raw_token: str, reset_url: str, settings: Settings) -> None:
     if not settings.dev_mail_outbox_enabled:
         return
@@ -316,22 +398,28 @@ def deliver_password_reset_email(*, email: str, raw_token: str, settings: Settin
         append_dev_mail_outbox(email=email, raw_token=raw_token, reset_url=reset_url, settings=settings)
         return
 
-    if not settings.smtp_host or not settings.smtp_from_email:
-        raise RuntimeError("SMTP delivery requires AUTHKIT_SMTP_HOST and AUTHKIT_SMTP_FROM_EMAIL")
+    send_smtp_email(
+        to_email=email,
+        subject=subject,
+        body=body,
+        settings=settings,
+    )
 
-    message = EmailMessage()
-    message["Subject"] = subject
-    message["From"] = f"{settings.smtp_from_name} <{settings.smtp_from_email}>" if settings.smtp_from_name else settings.smtp_from_email
-    message["To"] = email
-    message.set_content(body)
 
-    smtp_cls = smtplib.SMTP_SSL if settings.smtp_use_ssl else smtplib.SMTP
-    with smtp_cls(settings.smtp_host, settings.smtp_port, timeout=10) as server:
-        if not settings.smtp_use_ssl and settings.smtp_use_starttls:
-            server.starttls()
-        if settings.smtp_username and settings.smtp_password:
-            server.login(settings.smtp_username, settings.smtp_password)
-        server.send_message(message)
+def send_test_mail(*, to_email: str, settings: Settings) -> None:
+    if settings.mail_mode != "smtp":
+        raise RuntimeError("AUTHKIT_MAIL_MODE must be set to smtp to send a live test mail.")
+
+    send_smtp_email(
+        to_email=to_email,
+        subject="auth-kit SMTP test mail",
+        body=(
+            "This is a live SMTP test mail from auth-kit.\n\n"
+            f"Configured mail mode: {settings.mail_mode}\n"
+            "If you received this message, the current SMTP configuration is working.\n"
+        ),
+        settings=settings,
+    )
 
 
 def revoke_session(session: AuthSession) -> None:

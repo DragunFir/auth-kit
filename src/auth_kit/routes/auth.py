@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, File, Request, Response, UploadFile, status
@@ -77,6 +78,8 @@ from ..services import (
     update_user_profile,
     update_user_security,
 )
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/auth", tags=["auth"], dependencies=[Depends(require_csrf_protection)])
 
@@ -265,6 +268,11 @@ def forgot_password(
     try:
         deliver_password_reset_email(email=user.email, raw_token=raw_token, settings=settings)
     except Exception as exc:
+        logger.exception(
+            "[auth-kit] password reset delivery failed for %s using mail_mode=%s",
+            user.email,
+            settings.mail_mode,
+        )
         log_event(
             db,
             event_type="auth.password_reset_delivery_failed",

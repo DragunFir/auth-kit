@@ -2,6 +2,9 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import pytest
+from pydantic import ValidationError
+
 from auth_kit.core.config import Settings
 
 
@@ -24,6 +27,11 @@ def test_settings_reads_prefixed_mail_mode_from_env_file(tmp_path) -> None:
         tmp_path / "smtp.env",
         [
             "AUTHKIT_MAIL_MODE=smtp",
+            "AUTHKIT_SMTP_HOST=smtp.example.com",
+            "AUTHKIT_SMTP_PORT=587",
+            "AUTHKIT_SMTP_USERNAME=mailer",
+            "AUTHKIT_SMTP_PASSWORD=super-secret",
+            "AUTHKIT_SMTP_FROM_EMAIL=no-reply@example.com",
         ],
     )
 
@@ -33,6 +41,21 @@ def test_settings_reads_prefixed_mail_mode_from_env_file(tmp_path) -> None:
     )
 
     assert settings.mail_mode == "smtp"
+
+
+def test_settings_require_smtp_configuration_when_mail_mode_is_smtp(tmp_path) -> None:
+    env_file = _write_env_file(
+        tmp_path / "invalid-smtp.env",
+        [
+            "AUTHKIT_MAIL_MODE=smtp",
+        ],
+    )
+
+    with pytest.raises(ValidationError, match="AUTHKIT_MAIL_MODE=smtp requires the following settings"):
+        Settings(
+            database_url=f"sqlite+pysqlite:///{tmp_path / 'invalid.db'}",
+            _env_file=env_file,
+        )
 
 
 def test_settings_reads_legacy_prefixed_mail_mode_alias_from_env_file(tmp_path) -> None:
