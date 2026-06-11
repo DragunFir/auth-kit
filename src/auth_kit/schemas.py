@@ -60,6 +60,9 @@ class UserSecurityPublic(ResponseModel):
     passkeys_enabled: bool
     recovery_codes_enabled: bool
     trusted_devices_enabled: bool
+    pending_two_factor_setup: bool = False
+    recovery_codes_remaining: int = 0
+    trusted_devices_count: int = 0
     created_at: datetime
     updated_at: datetime
 
@@ -109,6 +112,14 @@ class LoginRequest(RequestModel):
     password: str = Field(min_length=1)
 
 
+class LoginTwoFactorRequiredResponse(ResponseModel):
+    ok: bool = True
+    message: str
+    requires_two_factor: bool = True
+    available_methods: list[str] = Field(default_factory=lambda: ["totp", "recovery_code"])
+    challenge_expires_at: datetime
+
+
 class RegisterRequest(RequestModel):
     email: EmailStr
     username: str = Field(min_length=3, max_length=64)
@@ -119,6 +130,12 @@ class RegisterRequest(RequestModel):
 class ChangePasswordRequest(RequestModel):
     current_password: str = Field(min_length=1)
     new_password: str = Field(min_length=1)
+
+
+class VerifyTwoFactorLoginRequest(RequestModel):
+    code: str = Field(min_length=1)
+    trust_device: bool = False
+    device_label: str | None = Field(default=None, max_length=255)
 
 
 class ForgotPasswordRequest(RequestModel):
@@ -177,6 +194,45 @@ class UserSecurityPatchRequest(RequestModel):
     passkeys_enabled: bool | None = None
     recovery_codes_enabled: bool | None = None
     trusted_devices_enabled: bool | None = None
+
+
+class TwoFactorSetupResponse(ResponseModel):
+    secret: str
+    otpauth_uri: str
+    qr_data: str
+    security: UserSecurityPublic
+
+
+class EnableTwoFactorRequest(RequestModel):
+    code: str = Field(min_length=1)
+
+
+class RecoveryCodesResponse(ResponseModel):
+    ok: bool = True
+    message: str
+    recovery_codes: list[str]
+    security: UserSecurityPublic
+
+
+class DisableTwoFactorRequest(RequestModel):
+    current_password: str = Field(min_length=1)
+
+
+class RegenerateRecoveryCodesRequest(RequestModel):
+    current_password: str = Field(min_length=1)
+
+
+class TrustedDevicePublic(ResponseModel):
+    id: UUID
+    device_label: str | None
+    user_agent: str | None
+    ip_address: str | None
+    created_at: datetime
+    updated_at: datetime
+    last_used_at: datetime | None
+    expires_at: datetime
+    revoked_at: datetime | None
+    is_current: bool
 
 
 class AdminCreateUserRequest(RequestModel):

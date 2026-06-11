@@ -34,6 +34,23 @@ def test_account_surface_includes_session_controls() -> None:
     assert 'session.is_current ? "Logout current" : "End session"' in app_source
 
 
+def test_security_preferences_are_marked_as_planned_not_active() -> None:
+    app_source = Path("web/src/App.tsx").read_text()
+
+    assert 'title="Security preferences"' in app_source
+    assert 'subheader="Prepared security options"' in app_source
+    assert "These options are prepared for future releases and are not active security features yet." in app_source
+    assert 'label="Two-factor authentication planned"' in app_source
+    assert 'label="Passkeys planned"' in app_source
+    assert 'label="Recovery codes planned"' in app_source
+    assert 'label="Trusted devices planned"' in app_source
+    assert 'label="Two-factor enabled"' not in app_source
+    assert 'label="Passkeys enabled"' not in app_source
+    assert 'label="Recovery codes enabled"' not in app_source
+    assert 'label="Trusted devices enabled"' not in app_source
+    assert "Save security" not in app_source
+
+
 def test_admin_surface_exposes_safe_role_and_status_controls_only() -> None:
     app_source = Path("web/src/App.tsx").read_text()
 

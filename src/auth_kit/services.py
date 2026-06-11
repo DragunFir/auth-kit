@@ -3,7 +3,7 @@ from __future__ import annotations
 import json
 import logging
 import smtplib
-from datetime import timedelta
+from datetime import datetime, timedelta
 from email.message import EmailMessage
 from pathlib import Path
 from secrets import choice
@@ -21,8 +21,12 @@ from .db import utcnow
 from .errors import ApiError
 from .models import (
     AuthAuditLog,
+    AuthLoginChallenge,
+    AuthPasskeyCredential,
     AuthPasswordResetToken,
+    AuthRecoveryCode,
     AuthSession,
+    AuthTrustedDevice,
     AuthUser,
     AuthUserAddress,
     AuthUserContact,
@@ -31,15 +35,27 @@ from .models import (
     AuthUserSecurity,
 )
 from .security import (
+    build_totp_otpauth_uri,
+    generate_login_challenge_token,
+    generate_recovery_codes,
     generate_csrf_token,
     generate_password_reset_token,
     generate_session_token,
+    generate_totp_secret,
+    generate_trusted_device_token,
+    hash_login_challenge_token,
     hash_password,
     hash_password_reset_token,
+    hash_recovery_code,
     hash_session_token,
+    hash_trusted_device_token,
     normalize_email,
+    normalize_recovery_code,
     normalize_roles,
     normalize_username,
+    protect_sensitive_value,
+    unprotect_sensitive_value,
+    verify_totp_code,
     validate_password,
     verify_password,
 )
@@ -60,6 +76,7 @@ AVATAR_CONTENT_TYPES = {
 AVATAR_ROUTE_PREFIX = "/api/auth/avatars/"
 LEGACY_AVATAR_ROUTE_PREFIX = "/uploads/avatars/"
 AVATAR_CONTENT_TYPES_BY_SUFFIX = {suffix: content_type for content_type, suffix in AVATAR_CONTENT_TYPES.items()}
+LOGIN_CHALLENGE_COOKIE_NAME = "authkit_login_challenge"
 
 
 def is_set[T](value: T | UnsetType) -> TypeGuard[T]:
@@ -137,6 +154,38 @@ def issue_csrf_token(response: Response, settings: Settings) -> str:
     return csrf_token
 
 
+def set_login_challenge_cookie(response: Response, settings: Settings, raw_token: str) -> None:
+    cookie_kwargs = {
+        "key": LOGIN_CHALLENGE_COOKIE_NAME,
+        "value": raw_token,
+        "httponly": True,
+        "secure": settings.session_cookie_secure,
+        "samesite": settings.session_cookie_samesite,
+        "max_age": settings.two_factor_login_challenge_ttl_minutes * 60,
+        "path": settings.session_cookie_path,
+    }
+    if settings.session_cookie_domain:
+        response.set_cookie(domain=settings.session_cookie_domain, **cookie_kwargs)
+        return
+    response.set_cookie(**cookie_kwargs)
+
+
+def set_trusted_device_cookie(response: Response, settings: Settings, raw_token: str) -> None:
+    cookie_kwargs = {
+        "key": settings.trusted_device_cookie_name,
+        "value": raw_token,
+        "httponly": True,
+        "secure": settings.session_cookie_secure,
+        "samesite": settings.session_cookie_samesite,
+        "max_age": settings.trusted_device_ttl_days * 24 * 3600,
+        "path": settings.session_cookie_path,
+    }
+    if settings.session_cookie_domain:
+        response.set_cookie(domain=settings.session_cookie_domain, **cookie_kwargs)
+        return
+    response.set_cookie(**cookie_kwargs)
+
+
 def clear_session_cookie(response: Response, settings: Settings) -> None:
     if settings.session_cookie_domain:
         response.delete_cookie(
@@ -163,6 +212,34 @@ def clear_csrf_cookie(response: Response, settings: Settings) -> None:
 
     response.delete_cookie(
         key=settings.csrf_cookie_name,
+        path=settings.session_cookie_path,
+    )
+
+
+def clear_login_challenge_cookie(response: Response, settings: Settings) -> None:
+    if settings.session_cookie_domain:
+        response.delete_cookie(
+            key=LOGIN_CHALLENGE_COOKIE_NAME,
+            path=settings.session_cookie_path,
+            domain=settings.session_cookie_domain,
+        )
+        return
+    response.delete_cookie(
+        key=LOGIN_CHALLENGE_COOKIE_NAME,
+        path=settings.session_cookie_path,
+    )
+
+
+def clear_trusted_device_cookie(response: Response, settings: Settings) -> None:
+    if settings.session_cookie_domain:
+        response.delete_cookie(
+            key=settings.trusted_device_cookie_name,
+            path=settings.session_cookie_path,
+            domain=settings.session_cookie_domain,
+        )
+        return
+    response.delete_cookie(
+        key=settings.trusted_device_cookie_name,
         path=settings.session_cookie_path,
     )
 
@@ -317,6 +394,354 @@ def build_password_reset_url(settings: Settings, raw_token: str) -> str:
     query_items = dict(parse_qsl(parts.query, keep_blank_values=True))
     query_items["token"] = raw_token
     return urlunsplit((parts.scheme, parts.netloc, parts.path, urlencode(query_items), parts.fragment))
+
+
+def mark_user_logged_in(user: AuthUser) -> None:
+    user.last_login_at = utcnow()
+
+
+def active_recovery_codes_count(user: AuthUser) -> int:
+    return sum(1 for code in user.recovery_codes if code.consumed_at is None)
+
+
+def active_trusted_devices_count(user: AuthUser, *, now: datetime | None = None) -> int:
+    current_time = now or utcnow()
+    return sum(
+        1
+        for device in user.trusted_devices
+        if device.revoked_at is None and device.expires_at > current_time
+    )
+
+
+def user_security_payload(user: AuthUser, *, now: datetime | None = None) -> dict[str, object]:
+    current_time = now or utcnow()
+    security = user.security
+    if security is None:
+        raise ApiError(status_code=500, error_code="security_profile_missing", message="Security profile is missing.")
+    return {
+        "two_factor_enabled": security.two_factor_enabled,
+        "passkeys_enabled": security.passkeys_enabled,
+        "recovery_codes_enabled": security.recovery_codes_enabled,
+        "trusted_devices_enabled": security.trusted_devices_enabled,
+        "pending_two_factor_setup": bool(security.pending_totp_secret_protected),
+        "recovery_codes_remaining": active_recovery_codes_count(user),
+        "trusted_devices_count": active_trusted_devices_count(user, now=current_time),
+        "created_at": security.created_at,
+        "updated_at": security.updated_at,
+    }
+
+
+def sync_user_security_state(db: Session, user: AuthUser) -> AuthUserSecurity:
+    ensure_user_details(db, user)
+    security = user.security
+    assert security is not None
+    current_time = utcnow()
+    security.two_factor_enabled = bool(security.totp_secret_protected)
+    security.recovery_codes_enabled = active_recovery_codes_count(user) > 0
+    security.trusted_devices_enabled = active_trusted_devices_count(user, now=current_time) > 0
+    security.passkeys_enabled = any(True for _ in user.passkey_credentials)
+    security.updated_at = current_time
+    db.flush()
+    return security
+
+
+def prune_expired_login_challenges(db: Session, *, user_id: int | None = None) -> None:
+    stmt = select(AuthLoginChallenge).where(AuthLoginChallenge.expires_at <= utcnow())
+    if user_id is not None:
+        stmt = stmt.where(AuthLoginChallenge.user_id == user_id)
+    for challenge in db.scalars(stmt):
+        db.delete(challenge)
+    db.flush()
+
+
+def clear_login_challenges(db: Session, *, user_id: int) -> None:
+    for challenge in db.scalars(select(AuthLoginChallenge).where(AuthLoginChallenge.user_id == user_id)):
+        db.delete(challenge)
+    db.flush()
+
+
+def create_login_challenge(
+    db: Session,
+    *,
+    user: AuthUser,
+    request: Request | None,
+    settings: Settings,
+) -> tuple[AuthLoginChallenge, str]:
+    clear_login_challenges(db, user_id=user.id)
+    raw_token = generate_login_challenge_token()
+    challenge = AuthLoginChallenge(
+        user=user,
+        token_hash=hash_login_challenge_token(raw_token),
+        expires_at=utcnow() + timedelta(minutes=settings.two_factor_login_challenge_ttl_minutes),
+        user_agent=request.headers.get("user-agent") if request else None,
+        ip_address=get_client_ip(request),
+    )
+    db.add(challenge)
+    db.flush()
+    return challenge, raw_token
+
+
+def resolve_login_challenge(db: Session, *, raw_token: str | None) -> AuthLoginChallenge | None:
+    if not raw_token:
+        return None
+    prune_expired_login_challenges(db)
+    return db.scalar(
+        select(AuthLoginChallenge).where(
+            AuthLoginChallenge.token_hash == hash_login_challenge_token(raw_token),
+            AuthLoginChallenge.expires_at > utcnow(),
+        )
+    )
+
+
+def invalidate_recovery_codes(db: Session, *, user_id: int) -> int:
+    current_time = utcnow()
+    invalidated = 0
+    for code in db.scalars(select(AuthRecoveryCode).where(AuthRecoveryCode.user_id == user_id, AuthRecoveryCode.consumed_at.is_(None))):
+        code.consumed_at = current_time
+        code.updated_at = current_time
+        invalidated += 1
+    db.flush()
+    return invalidated
+
+
+def create_recovery_codes(db: Session, *, user: AuthUser, settings: Settings) -> list[str]:
+    invalidate_recovery_codes(db, user_id=user.id)
+    recovery_codes = generate_recovery_codes(count=settings.recovery_code_count)
+    for code in recovery_codes:
+        db.add(AuthRecoveryCode(user=user, code_hash=hash_recovery_code(code)))
+    db.flush()
+    return recovery_codes
+
+
+def consume_recovery_code(db: Session, *, user: AuthUser, raw_code: str) -> bool:
+    normalized_hash = hash_recovery_code(raw_code)
+    recovery_code = db.scalar(
+        select(AuthRecoveryCode).where(
+            AuthRecoveryCode.user_id == user.id,
+            AuthRecoveryCode.code_hash == normalized_hash,
+            AuthRecoveryCode.consumed_at.is_(None),
+        )
+    )
+    if recovery_code is None:
+        return False
+    current_time = utcnow()
+    recovery_code.consumed_at = current_time
+    recovery_code.updated_at = current_time
+    db.flush()
+    return True
+
+
+def revoke_trusted_device(device: AuthTrustedDevice) -> None:
+    current_time = utcnow()
+    if device.revoked_at is None:
+        device.revoked_at = current_time
+    device.updated_at = current_time
+
+
+def prune_expired_trusted_devices(db: Session, *, user_id: int | None = None) -> None:
+    stmt = select(AuthTrustedDevice).where(
+        AuthTrustedDevice.revoked_at.is_(None),
+        AuthTrustedDevice.expires_at <= utcnow(),
+    )
+    if user_id is not None:
+        stmt = stmt.where(AuthTrustedDevice.user_id == user_id)
+    for device in db.scalars(stmt):
+        revoke_trusted_device(device)
+    db.flush()
+
+
+def revoke_user_trusted_devices(db: Session, *, user_id: int) -> int:
+    revoked = 0
+    for device in db.scalars(select(AuthTrustedDevice).where(AuthTrustedDevice.user_id == user_id, AuthTrustedDevice.revoked_at.is_(None))):
+        revoke_trusted_device(device)
+        revoked += 1
+    db.flush()
+    return revoked
+
+
+def create_trusted_device(
+    db: Session,
+    *,
+    user: AuthUser,
+    request: Request | None,
+    settings: Settings,
+    device_label: str | None,
+) -> tuple[AuthTrustedDevice, str]:
+    raw_token = generate_trusted_device_token()
+    device = AuthTrustedDevice(
+        user=user,
+        token_hash=hash_trusted_device_token(raw_token),
+        device_label=_clean_optional_string(device_label) or "Trusted device",
+        user_agent=request.headers.get("user-agent") if request else None,
+        ip_address=get_client_ip(request),
+        last_used_at=utcnow(),
+        expires_at=utcnow() + timedelta(days=settings.trusted_device_ttl_days),
+    )
+    db.add(device)
+    db.flush()
+    return device, raw_token
+
+
+def resolve_trusted_device(
+    db: Session,
+    *,
+    user_id: int,
+    raw_token: str | None,
+) -> AuthTrustedDevice | None:
+    if not raw_token:
+        return None
+    prune_expired_trusted_devices(db, user_id=user_id)
+    device = db.scalar(
+        select(AuthTrustedDevice).where(
+            AuthTrustedDevice.user_id == user_id,
+            AuthTrustedDevice.token_hash == hash_trusted_device_token(raw_token),
+            AuthTrustedDevice.revoked_at.is_(None),
+            AuthTrustedDevice.expires_at > utcnow(),
+        )
+    )
+    if device is not None:
+        device.last_used_at = utcnow()
+        device.updated_at = utcnow()
+        db.flush()
+    return device
+
+
+def list_active_trusted_devices_for_user(db: Session, user_id: int) -> list[AuthTrustedDevice]:
+    prune_expired_trusted_devices(db, user_id=user_id)
+    stmt = (
+        select(AuthTrustedDevice)
+        .where(
+            AuthTrustedDevice.user_id == user_id,
+            AuthTrustedDevice.revoked_at.is_(None),
+            AuthTrustedDevice.expires_at > utcnow(),
+        )
+        .order_by(AuthTrustedDevice.last_used_at.desc().nullslast(), AuthTrustedDevice.created_at.desc())
+    )
+    return list(db.scalars(stmt))
+
+
+def get_trusted_device_or_404(db: Session, *, user_id: int, device_id: UUID) -> AuthTrustedDevice:
+    device = db.get(AuthTrustedDevice, device_id)
+    if device is None or device.user_id != user_id:
+        raise ApiError(status_code=404, error_code="trusted_device_not_found", message="Trusted device not found.")
+    return device
+
+
+def start_two_factor_setup(db: Session, *, user: AuthUser, settings: Settings) -> tuple[AuthUserSecurity, str, str]:
+    ensure_user_details(db, user)
+    security = user.security
+    assert security is not None
+    sync_user_security_state(db, user)
+    if security.two_factor_enabled:
+        raise ApiError(status_code=409, error_code="two_factor_already_enabled", message="Two-factor authentication is already enabled.")
+
+    secret = generate_totp_secret()
+    security.pending_totp_secret_protected = protect_sensitive_value(
+        secret,
+        settings=settings,
+        purpose="totp-secret",
+    )
+    security.updated_at = utcnow()
+    db.flush()
+    account_name = user.email
+    issuer = settings.two_factor_issuer or settings.app_name
+    otpauth_uri = build_totp_otpauth_uri(secret=secret, issuer=issuer, account_name=account_name)
+    return security, secret, otpauth_uri
+
+
+def enable_two_factor(
+    db: Session,
+    *,
+    user: AuthUser,
+    code: str,
+    settings: Settings,
+) -> tuple[AuthUserSecurity, list[str]]:
+    ensure_user_details(db, user)
+    security = user.security
+    assert security is not None
+    if not security.pending_totp_secret_protected:
+        raise ApiError(status_code=400, error_code="two_factor_setup_missing", message="Start two-factor setup before enabling it.")
+
+    secret = unprotect_sensitive_value(
+        security.pending_totp_secret_protected,
+        settings=settings,
+        purpose="totp-secret",
+    )
+    if not verify_totp_code(secret, code):
+        raise ApiError(status_code=400, error_code="two_factor_code_invalid", message="Two-factor code is invalid.")
+
+    current_time = utcnow()
+    security.totp_secret_protected = protect_sensitive_value(secret, settings=settings, purpose="totp-secret")
+    security.pending_totp_secret_protected = None
+    security.two_factor_confirmed_at = current_time
+    recovery_codes = create_recovery_codes(db, user=user, settings=settings)
+    security.updated_at = current_time
+    sync_user_security_state(db, user)
+    return security, recovery_codes
+
+
+def disable_two_factor(
+    db: Session,
+    *,
+    user: AuthUser,
+    current_password: str,
+) -> AuthUserSecurity:
+    if not verify_password(current_password, user.password_hash):
+        raise ApiError(status_code=400, error_code="current_password_invalid", message="Current password is invalid.")
+
+    ensure_user_details(db, user)
+    security = user.security
+    assert security is not None
+    security.totp_secret_protected = None
+    security.pending_totp_secret_protected = None
+    security.two_factor_confirmed_at = None
+    invalidate_recovery_codes(db, user_id=user.id)
+    revoke_user_trusted_devices(db, user_id=user.id)
+    clear_login_challenges(db, user_id=user.id)
+    sync_user_security_state(db, user)
+    return security
+
+
+def regenerate_recovery_codes(
+    db: Session,
+    *,
+    user: AuthUser,
+    current_password: str,
+    settings: Settings,
+) -> tuple[AuthUserSecurity, list[str]]:
+    if not verify_password(current_password, user.password_hash):
+        raise ApiError(status_code=400, error_code="current_password_invalid", message="Current password is invalid.")
+    ensure_user_details(db, user)
+    security = user.security
+    assert security is not None
+    if not security.totp_secret_protected:
+        raise ApiError(status_code=400, error_code="two_factor_not_enabled", message="Two-factor authentication is not enabled.")
+
+    recovery_codes = create_recovery_codes(db, user=user, settings=settings)
+    sync_user_security_state(db, user)
+    return security, recovery_codes
+
+
+def verify_two_factor_code_for_user(
+    db: Session,
+    *,
+    user: AuthUser,
+    code: str,
+    settings: Settings,
+) -> str:
+    ensure_user_details(db, user)
+    security = user.security
+    assert security is not None
+    if not security.totp_secret_protected:
+        raise ApiError(status_code=400, error_code="two_factor_not_enabled", message="Two-factor authentication is not enabled.")
+
+    secret = unprotect_sensitive_value(security.totp_secret_protected, settings=settings, purpose="totp-secret")
+    if verify_totp_code(secret, code):
+        return "totp"
+    if consume_recovery_code(db, user=user, raw_code=code):
+        sync_user_security_state(db, user)
+        return "recovery_code"
+    raise ApiError(status_code=401, error_code="two_factor_code_invalid", message="Two-factor code is invalid.")
 
 
 def ensure_smtp_configuration(settings: Settings) -> None:
@@ -496,7 +921,6 @@ def authenticate_user(db: Session, *, identifier: str, password: str) -> AuthUse
         raise ApiError(status_code=401, error_code="invalid_credentials", message="Invalid credentials.")
     if not user.is_active:
         raise ApiError(status_code=403, error_code="user_disabled", message="User is disabled.")
-    user.last_login_at = utcnow()
     return user
 
 
@@ -525,6 +949,8 @@ def change_user_password(
     user.password_hash = hash_password(new_password)
     user.updated_at = utcnow()
     invalidate_password_reset_tokens(db, user_id=user.id)
+    revoke_user_trusted_devices(db, user_id=user.id)
+    clear_login_challenges(db, user_id=user.id)
     revoke_user_sessions(db, user_id=user.id, except_session_id=current_session_id)
 
 
@@ -604,6 +1030,8 @@ def reset_password_with_token(
     reset_token.consumed_at = now
     reset_token.updated_at = now
     invalidate_password_reset_tokens(db, user_id=user.id)
+    revoke_user_trusted_devices(db, user_id=user.id)
+    clear_login_challenges(db, user_id=user.id)
     revoke_user_sessions(db, user_id=user.id)
     db.flush()
     return user
@@ -1018,20 +1446,18 @@ def update_user_security(
     recovery_codes_enabled: bool | None | UnsetType = UNSET,
     trusted_devices_enabled: bool | None | UnsetType = UNSET,
 ) -> AuthUserSecurity:
-    ensure_user_details(db, user)
-    security = user.security
-    assert security is not None
-    if is_set(two_factor_enabled) and two_factor_enabled is not None:
-        security.two_factor_enabled = two_factor_enabled
-    if is_set(passkeys_enabled) and passkeys_enabled is not None:
-        security.passkeys_enabled = passkeys_enabled
-    if is_set(recovery_codes_enabled) and recovery_codes_enabled is not None:
-        security.recovery_codes_enabled = recovery_codes_enabled
-    if is_set(trusted_devices_enabled) and trusted_devices_enabled is not None:
-        security.trusted_devices_enabled = trusted_devices_enabled
-    security.updated_at = utcnow()
-    db.flush()
-    return security
+    if (
+        is_set(two_factor_enabled)
+        or is_set(passkeys_enabled)
+        or is_set(recovery_codes_enabled)
+        or is_set(trusted_devices_enabled)
+    ):
+        raise ApiError(
+            status_code=400,
+            error_code="security_preferences_read_only",
+            message="Use the dedicated account protection endpoints for security changes.",
+        )
+    return sync_user_security_state(db, user)
 
 
 def admin_reset_password(
@@ -1047,6 +1473,8 @@ def admin_reset_password(
     target.password_hash = hash_password(new_password)
     target.updated_at = utcnow()
     invalidate_password_reset_tokens(db, user_id=target.id)
+    revoke_user_trusted_devices(db, user_id=target.id)
+    clear_login_challenges(db, user_id=target.id)
     revoke_user_sessions(db, user_id=target.id)
 
 
@@ -1067,6 +1495,8 @@ def admin_set_user_enabled(
     target.is_active = enabled
     target.updated_at = utcnow()
     if not enabled:
+        revoke_user_trusted_devices(db, user_id=target.id)
+        clear_login_challenges(db, user_id=target.id)
         revoke_user_sessions(db, user_id=target.id)
     return target
 

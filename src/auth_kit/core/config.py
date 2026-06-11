@@ -45,9 +45,15 @@ class Settings(BaseSettings):
     upload_dir: str = "./data/uploads"
     avatar_max_mb: int = 5
     security_hsts_max_age: int = 31536000
+    security_secret_key: str = "change-me-in-production-auth-kit-security-key"
 
     password_min_length: int = 12
     password_reset_ttl_minutes: int = 30
+    two_factor_issuer: str = "auth-kit"
+    two_factor_login_challenge_ttl_minutes: int = 10
+    recovery_code_count: int = 8
+    trusted_device_cookie_name: str = "authkit_td"
+    trusted_device_ttl_days: int = 30
     mail_mode: MailMode = Field(
         default="dev",
         validation_alias=AliasChoices(
@@ -91,6 +97,9 @@ class Settings(BaseSettings):
     @field_validator(
         "session_cookie_domain",
         "password_reset_url_base",
+        "security_secret_key",
+        "two_factor_issuer",
+        "trusted_device_cookie_name",
         "smtp_host",
         "smtp_username",
         "smtp_password",
@@ -133,11 +142,16 @@ class Settings(BaseSettings):
             raise ValueError("session_ttl_days must be >= 1")
         return value
 
-    @field_validator("password_reset_ttl_minutes")
+    @field_validator(
+        "password_reset_ttl_minutes",
+        "two_factor_login_challenge_ttl_minutes",
+        "recovery_code_count",
+        "trusted_device_ttl_days",
+    )
     @classmethod
     def validate_password_reset_ttl(cls, value: int) -> int:
         if value < 1:
-            raise ValueError("password_reset_ttl_minutes must be >= 1")
+            raise ValueError("account protection TTL settings must be >= 1")
         return value
 
     @field_validator("avatar_max_mb")

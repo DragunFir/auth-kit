@@ -26,7 +26,6 @@ import {
   Divider,
   FormControlLabel,
   Grid,
-  IconButton,
   List,
   ListItemButton,
   ListItemText,
@@ -36,7 +35,6 @@ import {
   Switch,
   TextField,
   Toolbar,
-  Tooltip,
   Typography,
 } from "@mui/material";
 import AddCircleOutlineRoundedIcon from "@mui/icons-material/AddCircleOutlineRounded";
@@ -235,13 +233,22 @@ function App() {
           backgroundColor: "rgba(245, 239, 228, 0.74)",
         }}
       >
-        <Toolbar sx={{ gap: 2 }}>
-          <Stack direction="row" spacing={1.5} alignItems="center" sx={{ flexGrow: 1 }}>
+        <Toolbar
+          sx={{
+            gap: 1.5,
+            py: 1.25,
+            alignItems: { xs: "stretch", sm: "center" },
+            flexWrap: "wrap",
+          }}
+        >
+          <Stack direction="row" spacing={1.5} alignItems="center" sx={{ flexGrow: 1, minWidth: 0 }}>
             <Avatar sx={{ bgcolor: "primary.main", color: "white" }}>
               <SecurityRoundedIcon fontSize="small" />
             </Avatar>
-            <Box>
-              <Typography variant="h6">auth-kit</Typography>
+            <Box sx={{ minWidth: 0 }}>
+              <Typography variant="h6" sx={{ lineHeight: 1.1 }}>
+                auth-kit
+              </Typography>
               <Typography variant="caption" color="text.secondary">
                 Account, Sessions and Admin
               </Typography>
@@ -249,7 +256,12 @@ function App() {
           </Stack>
 
           {me ? (
-            <Stack direction="row" spacing={1} alignItems="center">
+            <Stack
+              direction={{ xs: "column", sm: "row" }}
+              spacing={1}
+              alignItems={{ xs: "stretch", sm: "center" }}
+              sx={{ width: { xs: "100%", sm: "auto" } }}
+            >
               <Chip
                 icon={<PersonRoundedIcon />}
                 label={me.display_name || me.username}
@@ -260,6 +272,7 @@ function App() {
                 color={location.pathname.startsWith("/account") ? "secondary" : "inherit"}
                 variant={location.pathname.startsWith("/account") ? "contained" : "text"}
                 onClick={() => navigate("/account")}
+                fullWidth
               >
                 Account
               </Button>
@@ -269,23 +282,33 @@ function App() {
                   variant={location.pathname.startsWith("/admin") ? "contained" : "text"}
                   startIcon={<AdminPanelSettingsRoundedIcon />}
                   onClick={() => navigate("/admin/users")}
+                  fullWidth
                 >
                   Admin
                 </Button>
               ) : null}
-              <Tooltip title="Logout">
-                <IconButton onClick={() => void handleLogout()}>
-                  <LogoutRoundedIcon />
-                </IconButton>
-              </Tooltip>
+              <Button
+                variant="text"
+                color="inherit"
+                startIcon={<LogoutRoundedIcon />}
+                onClick={() => void handleLogout()}
+                fullWidth
+              >
+                Logout
+              </Button>
             </Stack>
           ) : (
-            <Stack direction="row" spacing={1}>
+            <Stack
+              direction={{ xs: "column", sm: "row" }}
+              spacing={1}
+              sx={{ width: { xs: "100%", sm: "auto" } }}
+            >
               {needsSetup ? (
                 <Button
                   variant={location.pathname === "/setup" ? "contained" : "text"}
                   color="secondary"
                   onClick={() => navigate("/setup")}
+                  fullWidth
                 >
                   First Owner Setup
                 </Button>
@@ -294,6 +317,7 @@ function App() {
                   <Button
                     variant={location.pathname === "/login" ? "contained" : "text"}
                     onClick={() => navigate("/login")}
+                    fullWidth
                   >
                     Login
                   </Button>
@@ -301,6 +325,7 @@ function App() {
                     variant={location.pathname === "/register" ? "contained" : "text"}
                     color="secondary"
                     onClick={() => navigate("/register")}
+                    fullWidth
                   >
                     Register
                   </Button>
@@ -1056,27 +1081,6 @@ function AccountPage({ me, onRefreshMe }: { me: MeResponse; onRefreshMe: () => P
     }
   }
 
-  async function saveSecurity() {
-    if (!security) {
-      return;
-    }
-    try {
-      const updated = await apiRequest<UserSecurity>("/api/auth/security", {
-        method: "PATCH",
-        body: JSON.stringify({
-          two_factor_enabled: security.two_factor_enabled,
-          passkeys_enabled: security.passkeys_enabled,
-          recovery_codes_enabled: security.recovery_codes_enabled,
-          trusted_devices_enabled: security.trusted_devices_enabled,
-        }),
-      });
-      setSecurity(updated);
-      setNotice({ severity: "success", message: "Security flags updated." });
-    } catch (error) {
-      setNotice({ severity: "error", message: getErrorMessage(error) });
-    }
-  }
-
   async function submitAddress() {
     try {
       const payload = {
@@ -1384,62 +1388,48 @@ function AccountPage({ me, onRefreshMe }: { me: MeResponse; onRefreshMe: () => P
         </Grid>
         <Grid size={{ xs: 12, md: 6 }}>
           <Card>
-            <CardHeader title="Security" subheader="Account protection preferences" />
+            <CardHeader title="Security preferences" subheader="Prepared security options" />
             <CardContent>
-              <Stack spacing={1.25}>
+              <Stack spacing={1.5}>
+                <Alert severity="info" variant="outlined">
+                  These options are prepared for future releases and are not active security features yet.
+                </Alert>
                 <FormControlLabel
                   control={
                     <Switch
-                      checked={security.two_factor_enabled}
-                      onChange={(event) =>
-                        setSecurity({ ...security, two_factor_enabled: event.target.checked })
-                      }
+                      checked={false}
+                      disabled
                     />
                   }
-                  label="Two-factor enabled"
+                  label="Two-factor authentication planned"
                 />
                 <FormControlLabel
                   control={
                     <Switch
-                      checked={security.passkeys_enabled}
-                      onChange={(event) =>
-                        setSecurity({ ...security, passkeys_enabled: event.target.checked })
-                      }
+                      checked={false}
+                      disabled
                     />
                   }
-                  label="Passkeys enabled"
+                  label="Passkeys planned"
                 />
                 <FormControlLabel
                   control={
                     <Switch
-                      checked={security.recovery_codes_enabled}
-                      onChange={(event) =>
-                        setSecurity({
-                          ...security,
-                          recovery_codes_enabled: event.target.checked,
-                        })
-                      }
+                      checked={false}
+                      disabled
                     />
                   }
-                  label="Recovery codes enabled"
+                  label="Recovery codes planned"
                 />
                 <FormControlLabel
                   control={
                     <Switch
-                      checked={security.trusted_devices_enabled}
-                      onChange={(event) =>
-                        setSecurity({
-                          ...security,
-                          trusted_devices_enabled: event.target.checked,
-                        })
-                      }
+                      checked={false}
+                      disabled
                     />
                   }
-                  label="Trusted devices enabled"
+                  label="Trusted devices planned"
                 />
-                <Button variant="contained" onClick={() => void saveSecurity()}>
-                  Save security
-                </Button>
               </Stack>
             </CardContent>
           </Card>

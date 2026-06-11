@@ -21,17 +21,24 @@ from ..deps import (
 )
 from ..errors import ApiError
 from ..models import AuthSession
+from ..security import hash_trusted_device_token
 from ..schemas import (
     AuthMePublic,
     ChangePasswordRequest,
     CsrfTokenResponse,
+    DisableTwoFactorRequest,
+    EnableTwoFactorRequest,
     ForgotPasswordRequest,
+    LoginTwoFactorRequiredResponse,
     LoginRequest,
+    RecoveryCodesResponse,
     RegisterRequest,
+    RegenerateRecoveryCodesRequest,
     ResetPasswordRequest,
     SessionPublic,
     StatusMessageResponse,
     StatusResponse,
+    TrustedDevicePublic,
     UserAddressCreateRequest,
     UserAddressPatchRequest,
     UserAddressPublic,
@@ -44,39 +51,62 @@ from ..schemas import (
     UserPublic,
     UserSecurityPatchRequest,
     UserSecurityPublic,
+    TwoFactorSetupResponse,
+    VerifyTwoFactorLoginRequest,
 )
 from ..services import (
+    LOGIN_CHALLENGE_COOKIE_NAME,
     UNSET,
     authenticate_user,
     avatar_media_type,
     avatar_storage_path,
     change_user_password,
     clear_csrf_cookie,
+    clear_login_challenges,
+    clear_login_challenge_cookie,
     clear_session_cookie,
+    clear_trusted_device_cookie,
     create_password_reset_token,
     create_session_for_user,
     create_user_address,
+    create_login_challenge,
+    create_trusted_device,
     delete_user_address,
     deliver_password_reset_email,
+    disable_two_factor,
+    enable_two_factor,
     ensure_user_details,
     get_avatar_profile_or_404,
     get_profile_avatar_or_404,
+    get_trusted_device_or_404,
     get_user_address_or_404,
     get_user_by_email,
     issue_csrf_token,
     list_active_sessions_for_user,
+    list_active_trusted_devices_for_user,
     list_user_addresses,
     log_event,
+    mark_user_logged_in,
     register_user,
+    regenerate_recovery_codes,
+    resolve_login_challenge,
+    resolve_trusted_device,
     reset_password_with_token,
     revoke_session,
+    revoke_trusted_device,
     set_session_cookie,
+    set_login_challenge_cookie,
+    set_trusted_device_cookie,
+    start_two_factor_setup,
     store_user_avatar,
+    sync_user_security_state,
+    user_security_payload,
     update_user_address,
     update_user_contact,
     update_user_preferences,
     update_user_profile,
     update_user_security,
+    verify_two_factor_code_for_user,
 )
 
 logger = logging.getLogger(__name__)
@@ -94,6 +124,31 @@ def _session_to_public(session: AuthSession, *, current_session_id: UUID) -> Ses
         user_agent=session.user_agent,
         ip_address=session.ip_address,
         is_current=session.id == current_session_id,
+    )
+
+
+def _security_to_public(auth: AuthContext) -> UserSecurityPublic:
+    return UserSecurityPublic.model_validate(user_security_payload(auth.user))
+
+
+def _trusted_device_to_public(
+    device,
+    *,
+    current_trusted_device_hash: str | None,
+) -> TrustedDevicePublic:
+    return TrustedDevicePublic.model_validate(
+        {
+            "id": device.id,
+            "device_label": device.device_label,
+            "user_agent": device.user_agent,
+            "ip_address": device.ip_address,
+            "created_at": device.created_at,
+            "updated_at": device.updated_at,
+            "last_used_at": device.last_used_at,
+            "expires_at": device.expires_at,
+            "revoked_at": device.revoked_at,
+            "is_current": current_trusted_device_hash == device.token_hash,
+        }
     )
 
 
@@ -118,6 +173,7 @@ def register(
         password=payload.password,
         settings=settings,
     )
+    mark_user_logged_in(user)
     _, raw_token = create_session_for_user(db, user=user, request=request, settings=settings)
     log_event(
         db,
@@ -132,14 +188,14 @@ def register(
     return UserPublic.model_validate(user)
 
 
-@router.post("/login", response_model=UserPublic, dependencies=[Depends(limit_login_requests)])
+@router.post("/login", response_model=UserPublic | LoginTwoFactorRequiredResponse, dependencies=[Depends(limit_login_requests)])
 def login(
     payload: LoginRequest,
     request: Request,
     response: Response,
     db: Session = Depends(get_db),
     settings: Settings = Depends(get_settings_dep),
-) -> UserPublic:
+) -> UserPublic | LoginTwoFactorRequiredResponse:
     try:
         user = authenticate_user(db, identifier=payload.identifier, password=payload.password)
     except ApiError:
@@ -152,6 +208,34 @@ def login(
         db.commit()
         raise
 
+    sync_user_security_state(db, user)
+    trusted_device = None
+    raw_trusted_device_cookie = request.cookies.get(settings.trusted_device_cookie_name)
+    if user.security is not None and user.security.two_factor_enabled:
+        trusted_device = resolve_trusted_device(
+            db,
+            user_id=user.id,
+            raw_token=raw_trusted_device_cookie,
+        )
+        if trusted_device is None:
+            challenge, raw_challenge = create_login_challenge(db, user=user, request=request, settings=settings)
+            log_event(
+                db,
+                event_type="auth.login_two_factor_challenge_created",
+                actor_user_id=user.id,
+                target_user_id=user.id,
+                request=request,
+            )
+            db.commit()
+            if raw_trusted_device_cookie:
+                clear_trusted_device_cookie(response, settings)
+            set_login_challenge_cookie(response, settings, raw_challenge)
+            response.status_code = status.HTTP_202_ACCEPTED
+            return LoginTwoFactorRequiredResponse(
+                message="Two-factor authentication is required to complete sign-in.",
+                challenge_expires_at=challenge.expires_at,
+            )
+
     raw_cookie = request.cookies.get(settings.session_cookie_name)
     if raw_cookie:
         from ..deps import _resolve_auth_context
@@ -160,6 +244,7 @@ def login(
         if current_auth_context is not None:
             revoke_session(current_auth_context.session)
 
+    mark_user_logged_in(user)
     _, raw_token = create_session_for_user(db, user=user, request=request, settings=settings)
     log_event(
         db,
@@ -167,9 +252,89 @@ def login(
         actor_user_id=user.id,
         target_user_id=user.id,
         request=request,
+        metadata={"second_factor_method": "trusted_device" if trusted_device is not None else "password_only"},
     )
     db.commit()
+    clear_login_challenge_cookie(response, settings)
     set_session_cookie(response, settings, raw_token)
+    return UserPublic.model_validate(user)
+
+
+@router.post("/login/verify-2fa", response_model=UserPublic, dependencies=[Depends(limit_login_requests)])
+def verify_login_two_factor(
+    payload: VerifyTwoFactorLoginRequest,
+    request: Request,
+    response: Response,
+    db: Session = Depends(get_db),
+    settings: Settings = Depends(get_settings_dep),
+) -> UserPublic:
+    challenge = resolve_login_challenge(db, raw_token=request.cookies.get(LOGIN_CHALLENGE_COOKIE_NAME))
+    if challenge is None:
+        raise ApiError(
+            status_code=400,
+            error_code="login_challenge_invalid",
+            message="Login challenge is missing or expired.",
+        )
+
+    user = challenge.user
+    if not user.is_active:
+        raise ApiError(status_code=403, error_code="user_disabled", message="User is disabled.")
+
+    try:
+        second_factor_method = verify_two_factor_code_for_user(db, user=user, code=payload.code, settings=settings)
+    except ApiError:
+        log_event(
+            db,
+            event_type="auth.login_two_factor_failed",
+            actor_user_id=user.id,
+            target_user_id=user.id,
+            request=request,
+        )
+        db.commit()
+        raise
+
+    raw_cookie = request.cookies.get(settings.session_cookie_name)
+    if raw_cookie:
+        from ..deps import _resolve_auth_context
+
+        current_auth_context = _resolve_auth_context(db, settings, raw_cookie)
+        if current_auth_context is not None:
+            revoke_session(current_auth_context.session)
+
+    mark_user_logged_in(user)
+    _, raw_token = create_session_for_user(db, user=user, request=request, settings=settings)
+    trusted_device_token: str | None = None
+    if payload.trust_device:
+        _, trusted_device_token = create_trusted_device(
+            db,
+            user=user,
+            request=request,
+            settings=settings,
+            device_label=payload.device_label,
+        )
+    log_event(
+        db,
+        event_type="auth.login",
+        actor_user_id=user.id,
+        target_user_id=user.id,
+        request=request,
+        metadata={"second_factor_method": second_factor_method},
+    )
+    if trusted_device_token is not None:
+        log_event(
+            db,
+            event_type="auth.trusted_device_registered",
+            actor_user_id=user.id,
+            target_user_id=user.id,
+            request=request,
+        )
+    clear_login_challenges(db, user_id=user.id)
+    sync_user_security_state(db, user)
+    db.commit()
+    clear_login_challenge_cookie(response, settings)
+    set_session_cookie(response, settings, raw_token)
+    if trusted_device_token is not None:
+        set_trusted_device_cookie(response, settings, trusted_device_token)
     return UserPublic.model_validate(user)
 
 
@@ -197,6 +362,7 @@ def logout(
             db.commit()
     clear_session_cookie(response, settings)
     clear_csrf_cookie(response, settings)
+    clear_login_challenge_cookie(response, settings)
     return StatusResponse()
 
 
@@ -588,8 +754,9 @@ def patch_preferences(
 def get_security(auth: AuthContext = Depends(current_auth), db: Session = Depends(get_db)) -> UserSecurityPublic:
     if ensure_user_details(db, auth.user):
         db.commit()
-    assert auth.user.security is not None
-    return UserSecurityPublic.model_validate(auth.user.security)
+    sync_user_security_state(db, auth.user)
+    db.commit()
+    return _security_to_public(auth)
 
 
 @router.patch("/security", response_model=UserSecurityPublic)
@@ -600,7 +767,7 @@ def patch_security(
     auth: AuthContext = Depends(current_auth),
 ) -> UserSecurityPublic:
     payload_data = payload.model_dump(exclude_unset=True)
-    security = update_user_security(
+    update_user_security(
         db,
         user=auth.user,
         two_factor_enabled=payload_data["two_factor_enabled"] if "two_factor_enabled" in payload_data else UNSET,
@@ -610,13 +777,164 @@ def patch_security(
     )
     log_event(
         db,
-        event_type="auth.security_updated",
+        event_type="auth.security_update_rejected",
         actor_user_id=auth.user.id,
         target_user_id=auth.user.id,
         request=request,
     )
     db.commit()
-    return UserSecurityPublic.model_validate(security)
+    raise ApiError(
+        status_code=400,
+        error_code="security_preferences_read_only",
+        message="Use the dedicated account protection endpoints for security changes.",
+    )
+
+
+@router.post("/security/two-factor/setup", response_model=TwoFactorSetupResponse)
+def setup_two_factor(
+    request: Request,
+    db: Session = Depends(get_db),
+    settings: Settings = Depends(get_settings_dep),
+    auth: AuthContext = Depends(current_auth),
+) -> TwoFactorSetupResponse:
+    _, secret, otpauth_uri = start_two_factor_setup(db, user=auth.user, settings=settings)
+    log_event(
+        db,
+        event_type="auth.two_factor_setup_started",
+        actor_user_id=auth.user.id,
+        target_user_id=auth.user.id,
+        request=request,
+    )
+    db.commit()
+    return TwoFactorSetupResponse(
+        secret=secret,
+        otpauth_uri=otpauth_uri,
+        qr_data=otpauth_uri,
+        security=_security_to_public(auth),
+    )
+
+
+@router.post("/security/two-factor/enable", response_model=RecoveryCodesResponse)
+def enable_two_factor_authentication(
+    payload: EnableTwoFactorRequest,
+    request: Request,
+    db: Session = Depends(get_db),
+    settings: Settings = Depends(get_settings_dep),
+    auth: AuthContext = Depends(current_auth),
+) -> RecoveryCodesResponse:
+    _, recovery_codes = enable_two_factor(db, user=auth.user, code=payload.code, settings=settings)
+    log_event(
+        db,
+        event_type="auth.two_factor_enabled",
+        actor_user_id=auth.user.id,
+        target_user_id=auth.user.id,
+        request=request,
+    )
+    db.commit()
+    return RecoveryCodesResponse(
+        message="Two-factor authentication has been enabled.",
+        recovery_codes=recovery_codes,
+        security=_security_to_public(auth),
+    )
+
+
+@router.post("/security/two-factor/disable", response_model=UserSecurityPublic)
+def disable_two_factor_authentication(
+    payload: DisableTwoFactorRequest,
+    request: Request,
+    response: Response,
+    db: Session = Depends(get_db),
+    settings: Settings = Depends(get_settings_dep),
+    auth: AuthContext = Depends(current_auth),
+) -> UserSecurityPublic:
+    disable_two_factor(db, user=auth.user, current_password=payload.current_password)
+    log_event(
+        db,
+        event_type="auth.two_factor_disabled",
+        actor_user_id=auth.user.id,
+        target_user_id=auth.user.id,
+        request=request,
+    )
+    db.commit()
+    clear_trusted_device_cookie(response, settings)
+    clear_login_challenge_cookie(response, settings)
+    return _security_to_public(auth)
+
+
+@router.post("/security/recovery-codes/regenerate", response_model=RecoveryCodesResponse)
+def regenerate_user_recovery_codes(
+    payload: RegenerateRecoveryCodesRequest,
+    request: Request,
+    db: Session = Depends(get_db),
+    settings: Settings = Depends(get_settings_dep),
+    auth: AuthContext = Depends(current_auth),
+) -> RecoveryCodesResponse:
+    _, recovery_codes = regenerate_recovery_codes(
+        db,
+        user=auth.user,
+        current_password=payload.current_password,
+        settings=settings,
+    )
+    log_event(
+        db,
+        event_type="auth.recovery_codes_regenerated",
+        actor_user_id=auth.user.id,
+        target_user_id=auth.user.id,
+        request=request,
+    )
+    db.commit()
+    return RecoveryCodesResponse(
+        message="Recovery codes have been regenerated.",
+        recovery_codes=recovery_codes,
+        security=_security_to_public(auth),
+    )
+
+
+@router.get("/security/trusted-devices", response_model=list[TrustedDevicePublic])
+def get_trusted_devices(
+    request: Request,
+    db: Session = Depends(get_db),
+    settings: Settings = Depends(get_settings_dep),
+    auth: AuthContext = Depends(current_auth),
+) -> list[TrustedDevicePublic]:
+    devices = list_active_trusted_devices_for_user(db, auth.user.id)
+    current_trusted_device_hash = None
+    raw_token = request.cookies.get(settings.trusted_device_cookie_name)
+    if raw_token:
+        current_trusted_device_hash = hash_trusted_device_token(raw_token)
+    sync_user_security_state(db, auth.user)
+    db.commit()
+    return [
+        _trusted_device_to_public(device, current_trusted_device_hash=current_trusted_device_hash)
+        for device in devices
+    ]
+
+
+@router.delete("/security/trusted-devices/{device_id}", response_model=StatusMessageResponse)
+def revoke_trusted_device_route(
+    device_id: UUID,
+    request: Request,
+    response: Response,
+    db: Session = Depends(get_db),
+    settings: Settings = Depends(get_settings_dep),
+    auth: AuthContext = Depends(current_auth),
+) -> StatusMessageResponse:
+    device = get_trusted_device_or_404(db, user_id=auth.user.id, device_id=device_id)
+    revoke_trusted_device(device)
+    sync_user_security_state(db, auth.user)
+    log_event(
+        db,
+        event_type="auth.trusted_device_revoked",
+        actor_user_id=auth.user.id,
+        target_user_id=auth.user.id,
+        request=request,
+        metadata={"trusted_device_id": str(device.id)},
+    )
+    db.commit()
+    raw_token = request.cookies.get(settings.trusted_device_cookie_name)
+    if raw_token and hash_trusted_device_token(raw_token) == device.token_hash:
+        clear_trusted_device_cookie(response, settings)
+    return StatusMessageResponse(message="Trusted device has been revoked.")
 
 
 @router.delete("/sessions/{session_id}", status_code=status.HTTP_204_NO_CONTENT)

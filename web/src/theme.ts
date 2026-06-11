@@ -36,10 +36,27 @@ export const appTheme = createTheme({
       fontFamily: '"Avenir Next Condensed", "IBM Plex Sans Condensed", sans-serif',
       fontWeight: 700,
       letterSpacing: "-0.03em",
+      fontSize: "2rem",
+      lineHeight: 1.02,
+      "@media (min-width:600px)": {
+        fontSize: "2.6rem",
+      },
     },
     h3: {
       fontFamily: '"Avenir Next Condensed", "IBM Plex Sans Condensed", sans-serif',
       fontWeight: 700,
+      fontSize: "1.65rem",
+      lineHeight: 1.08,
+      "@media (min-width:600px)": {
+        fontSize: "2.1rem",
+      },
+    },
+    h6: {
+      fontWeight: 700,
+      fontSize: "1rem",
+      "@media (min-width:600px)": {
+        fontSize: "1.15rem",
+      },
     },
     button: {
       textTransform: "none",

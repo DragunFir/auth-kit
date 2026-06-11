@@ -39,6 +39,25 @@ class AuthUser(TimestampMixin, Base):
         back_populates="user",
         cascade="all, delete-orphan",
     )
+    login_challenges: Mapped[list[AuthLoginChallenge]] = relationship(
+        back_populates="user",
+        cascade="all, delete-orphan",
+    )
+    recovery_codes: Mapped[list[AuthRecoveryCode]] = relationship(
+        back_populates="user",
+        cascade="all, delete-orphan",
+        order_by="AuthRecoveryCode.created_at",
+    )
+    trusted_devices: Mapped[list[AuthTrustedDevice]] = relationship(
+        back_populates="user",
+        cascade="all, delete-orphan",
+        order_by="AuthTrustedDevice.created_at.desc()",
+    )
+    passkey_credentials: Mapped[list[AuthPasskeyCredential]] = relationship(
+        back_populates="user",
+        cascade="all, delete-orphan",
+        order_by="AuthPasskeyCredential.created_at.asc()",
+    )
     profile: Mapped[AuthUserProfile | None] = relationship(
         back_populates="user",
         cascade="all, delete-orphan",
@@ -108,6 +127,62 @@ class AuthPasswordResetToken(TimestampMixin, Base):
     user_agent: Mapped[str | None] = mapped_column(Text, nullable=True)
 
     user: Mapped[AuthUser] = relationship(back_populates="password_reset_tokens")
+
+
+class AuthLoginChallenge(TimestampMixin, Base):
+    __tablename__ = "auth_login_challenge"
+
+    id: Mapped[UUID] = mapped_column(Uuid, primary_key=True, default=uuid4)
+    user_id: Mapped[int] = mapped_column(ForeignKey("auth_user.id", ondelete="CASCADE"), index=True)
+    token_hash: Mapped[str] = mapped_column(String(64), unique=True, index=True)
+    expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), index=True)
+    user_agent: Mapped[str | None] = mapped_column(Text, nullable=True)
+    ip_address: Mapped[str | None] = mapped_column(String(64), nullable=True)
+
+    user: Mapped[AuthUser] = relationship(back_populates="login_challenges")
+
+
+class AuthRecoveryCode(TimestampMixin, Base):
+    __tablename__ = "auth_recovery_code"
+
+    id: Mapped[UUID] = mapped_column(Uuid, primary_key=True, default=uuid4)
+    user_id: Mapped[int] = mapped_column(ForeignKey("auth_user.id", ondelete="CASCADE"), index=True)
+    code_hash: Mapped[str] = mapped_column(String(64), unique=True, index=True)
+    consumed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+
+    user: Mapped[AuthUser] = relationship(back_populates="recovery_codes")
+
+
+class AuthTrustedDevice(TimestampMixin, Base):
+    __tablename__ = "auth_trusted_device"
+
+    id: Mapped[UUID] = mapped_column(Uuid, primary_key=True, default=uuid4)
+    user_id: Mapped[int] = mapped_column(ForeignKey("auth_user.id", ondelete="CASCADE"), index=True)
+    token_hash: Mapped[str] = mapped_column(String(64), unique=True, index=True)
+    device_label: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    user_agent: Mapped[str | None] = mapped_column(Text, nullable=True)
+    ip_address: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    last_used_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), index=True)
+    revoked_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+
+    user: Mapped[AuthUser] = relationship(back_populates="trusted_devices")
+
+
+class AuthPasskeyCredential(TimestampMixin, Base):
+    __tablename__ = "auth_passkey_credential"
+
+    id: Mapped[UUID] = mapped_column(Uuid, primary_key=True, default=uuid4)
+    user_id: Mapped[int] = mapped_column(ForeignKey("auth_user.id", ondelete="CASCADE"), index=True)
+    credential_id: Mapped[str] = mapped_column(String(512), unique=True, index=True)
+    public_key: Mapped[str] = mapped_column(Text)
+    sign_count: Mapped[int] = mapped_column(Integer, default=0)
+    transports: Mapped[list[str]] = mapped_column(MutableList.as_mutable(JSON), default=list)
+    aaguid: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    friendly_name: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    last_used_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+
+    user: Mapped[AuthUser] = relationship(back_populates="passkey_credentials")
 
 
 class AuthUserProfile(TimestampMixin, Base):
@@ -183,5 +258,8 @@ class AuthUserSecurity(TimestampMixin, Base):
     passkeys_enabled: Mapped[bool] = mapped_column(Boolean, default=False)
     recovery_codes_enabled: Mapped[bool] = mapped_column(Boolean, default=False)
     trusted_devices_enabled: Mapped[bool] = mapped_column(Boolean, default=False)
+    totp_secret_protected: Mapped[str | None] = mapped_column(Text, nullable=True)
+    pending_totp_secret_protected: Mapped[str | None] = mapped_column(Text, nullable=True)
+    two_factor_confirmed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
 
     user: Mapped[AuthUser] = relationship(back_populates="security")
